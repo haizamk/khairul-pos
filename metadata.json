@@ -1,0 +1,6 @@
+{
+  "name": "Khairul Fresh POS - Sunmi V3",
+  "description": "Sistem POS Simple Mode untuk Khairul Fresh and Frozen Food serasi peranti Sunmi V3 dengan Receipt Designer, aliran timbang/kira pantas, dan laporan jualan.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

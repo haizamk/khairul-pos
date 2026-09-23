@@ -1,0 +1,107 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    function incoming() {
+      return request.resource.data;
+    }
+    function existing() {
+      return resource.data;
+    }
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isMasterAdmin() {
+      return isSignedIn() && (
+        // Case 1: Checking masterAdmin document in settings collection
+        (exists(/databases/$(database)/documents/settings/masterAdmin) && get(/databases/$(database)/documents/settings/masterAdmin).data.masterAdminUid == request.auth.uid) ||
+        // Case 2: Verification of the registered email
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.email == 'vpsrush@gmail.com') ||
+        (request.auth.token.email == 'vpsrush@gmail.com')
+      );
+    }
+
+    function isActiveAdmin() {
+      return isSignedIn() && (
+        isMasterAdmin() || (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active'
+        )
+      );
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(userId) && (
+        isMasterAdmin() || 
+        (userId == request.auth.uid && incoming().email == 'vpsrush@gmail.com' && incoming().role == 'master_admin')
+      );
+      allow update: if isSignedIn() && isValidId(userId) && (
+        isMasterAdmin() ||
+        // Allow self update of name, phone, password but block role or status escalation
+        (userId == request.auth.uid && incoming().role == existing().role && incoming().status == existing().status)
+      );
+      allow delete: if isSignedIn() && isValidId(userId) && isMasterAdmin() && userId != request.auth.uid;
+    }
+
+    match /categories/{categoryId} {
+      allow read: if isSignedIn();
+      allow create, update: if isActiveAdmin() && isValidId(categoryId)
+        && incoming().name is string && incoming().name.size() > 0 && incoming().name.size() <= 100
+        && incoming().sortOrder is number;
+      allow delete: if isActiveAdmin() && isValidId(categoryId);
+    }
+
+    match /products/{productId} {
+      allow read: if isSignedIn();
+      allow create, update: if isActiveAdmin() && isValidId(productId)
+        && incoming().name is string && incoming().name.size() > 0 && incoming().name.size() <= 150
+        && incoming().defaultPrice is number && incoming().defaultPrice >= 0
+        && incoming().defaultUnit in ['kg', 'ekor', 'pkt', 'set'];
+      allow delete: if isActiveAdmin() && isValidId(productId);
+    }
+
+    match /customers/{customerId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(customerId)
+        && incoming().name is string && incoming().name.size() > 0 && incoming().name.size() <= 150
+        && incoming().type in ['runcit', 'tetap', 'restoran', 'pemborong'];
+      allow delete: if isActiveAdmin() && isValidId(customerId);
+    }
+
+    match /transactions/{transactionId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(transactionId)
+        && incoming().invoiceNo is string && incoming().invoiceNo.size() > 0 && incoming().invoiceNo.size() <= 60
+        && incoming().totalAmount is number && incoming().totalAmount >= 0
+        && incoming().status in ['completed', 'voided'];
+      allow update: if isSignedIn() && isValidId(transactionId)
+        && incoming().status in ['completed', 'voided'];
+      allow delete: if isActiveAdmin() && isValidId(transactionId);
+    }
+
+    match /held_tickets/{ticketId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isSignedIn() && isValidId(ticketId);
+    }
+
+    match /settings/{settingId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isMasterAdmin() && isValidId(settingId);
+    }
+
+    // Connection test document
+    match /test/{docId} {
+      allow read: if true;
+    }
+  }
+}

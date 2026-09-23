@@ -1,0 +1,379 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "Store items and fresh products sold in the POS terminal",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the product"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 150,
+          "description": "Name of the product"
+        },
+        "defaultPrice": {
+          "type": "number",
+          "description": "Default unit price in MYR"
+        },
+        "defaultUnit": {
+          "type": "string",
+          "enum": ["kg", "ekor", "pkt", "set"],
+          "description": "Pricing unit for the product"
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Product category"
+        },
+        "isPopular": {
+          "type": "boolean",
+          "description": "Flag for popular item quick-access"
+        }
+      },
+      "required": ["id", "name", "defaultPrice", "defaultUnit"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Customer record and wholesale/retail tier",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the customer"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 150,
+          "description": "Customer name or restaurant business name"
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 30,
+          "description": "Phone number of customer"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["runcit", "tetap", "restoran", "pemborong"],
+          "description": "Customer category"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Payment or delivery notes"
+        },
+        "discountPercent": {
+          "type": "number",
+          "description": "Discount percentage applicable"
+        }
+      },
+      "required": ["id", "name", "type"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Completed sales transactions and receipts",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique transaction ID"
+        },
+        "invoiceNo": {
+          "type": "string",
+          "maxLength": 60,
+          "description": "Invoice number format INV-YYYYMMDD-XXXX"
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "ISO timestamp of transaction"
+        },
+        "customer": {
+          "type": "object",
+          "description": "Customer snapshot at time of checkout"
+        },
+        "items": {
+          "type": "array",
+          "description": "List of cart items purchased"
+        },
+        "subtotal": {
+          "type": "number",
+          "description": "Subtotal before discount"
+        },
+        "discount": {
+          "type": "number",
+          "description": "Discount amount in MYR"
+        },
+        "totalAmount": {
+          "type": "number",
+          "description": "Final paid amount"
+        },
+        "paymentMethod": {
+          "type": "string",
+          "enum": ["tunai", "kad_nfc", "qr_pay", "stripe", "hitpay", "hutang"],
+          "description": "Payment method used"
+        },
+        "amountPaid": {
+          "type": "number",
+          "description": "Amount tendered by customer"
+        },
+        "changeAmount": {
+          "type": "number",
+          "description": "Change returned to customer"
+        },
+        "cashierId": {
+          "type": "string",
+          "description": "UID of cashier handling transaction"
+        },
+        "cashierName": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Name of cashier handling transaction"
+        },
+        "cashierRole": {
+          "type": "string",
+          "enum": ["master_admin", "admin", "cashier"],
+          "description": "Role of cashier handling transaction"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["completed", "voided"],
+          "description": "Transaction status"
+        },
+        "voidReason": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Reason if voided"
+        },
+        "voidedAt": {
+          "type": "string",
+          "description": "Timestamp of void"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Optional notes"
+        },
+        "whatsappSent": {
+          "type": "boolean",
+          "description": "Whether receipt was sent via WhatsApp"
+        },
+        "whatsappSentAt": {
+          "type": "string",
+          "description": "Timestamp of WhatsApp dispatch"
+        },
+        "whatsappPhone": {
+          "type": "string",
+          "maxLength": 30,
+          "description": "Recipient WhatsApp phone number"
+        },
+        "whatsappStatus": {
+          "type": "string",
+          "enum": ["sent", "failed", "pending"],
+          "description": "Status of WhatsApp delivery"
+        },
+        "whatsappError": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Error details if WhatsApp delivery failed"
+        }
+      },
+      "required": ["id", "invoiceNo", "timestamp", "totalAmount", "paymentMethod", "status"]
+    },
+    "HeldTicket": {
+      "title": "HeldTicket",
+      "description": "Temporarily parked order ticket",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique ticket ID"
+        },
+        "ticketNumber": {
+          "type": "number",
+          "description": "Sequential ticket number"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Label for held ticket"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp when parked"
+        },
+        "customer": {
+          "type": "object",
+          "description": "Selected customer"
+        },
+        "items": {
+          "type": "array",
+          "description": "Cart items held"
+        },
+        "subtotal": {
+          "type": "number",
+          "description": "Subtotal of held items"
+        }
+      },
+      "required": ["id", "ticketNumber", "name", "createdAt", "subtotal"]
+    },
+    "AppSettings": {
+      "title": "AppSettings",
+      "description": "Global POS terminal configuration and receipts styling",
+      "type": "object",
+      "properties": {
+        "adminPin": {
+          "type": "string",
+          "maxLength": 20,
+          "description": "Admin access PIN"
+        },
+        "cashierName": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Default cashier name"
+        },
+        "storeName": {
+          "type": "string",
+          "maxLength": 150,
+          "description": "Store business title"
+        },
+        "currency": {
+          "type": "string",
+          "maxLength": 10,
+          "description": "Currency code e.g. RM"
+        },
+        "receiptConfig": {
+          "type": "object",
+          "description": "Thermal receipt formatting"
+        },
+        "paymentConfig": {
+          "type": "object",
+          "description": "Payment gateways configuration"
+        },
+        "soundEnabled": {
+          "type": "boolean",
+          "description": "Sound effects toggle"
+        },
+        "printSoundEnabled": {
+          "type": "boolean",
+          "description": "Thermal receipt print sound feedback toggle"
+        },
+        "deviceFrameMode": {
+          "type": "boolean",
+          "description": "Device frame mode toggle"
+        },
+        "categoryOrder": {
+          "type": "array",
+          "description": "Custom category sorting order"
+        },
+        "fonnteToken": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Fonnte API Device Token for sending automated WhatsApp PDF receipts"
+        }
+      },
+      "required": ["storeName", "currency"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Product category taxonomy for the POS terminal",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the category"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Category display name"
+        },
+        "sortOrder": {
+          "type": "number",
+          "description": "Display order index for category ordering"
+        }
+      },
+      "required": ["id", "name", "sortOrder"]
+    },
+    "AppUser": {
+      "title": "AppUser",
+      "description": "Store staff and users profile (Master Admin, Admin, Cashier)",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Full staff name"
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 30,
+          "description": "Staff phone number"
+        },
+        "loginId": {
+          "type": "string",
+          "maxLength": 50,
+          "description": "Unique staff login ID"
+        },
+        "email": {
+          "type": "string",
+          "description": "Associated Firebase auth email"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["master_admin", "admin", "cashier"],
+          "description": "Role level permission"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "inactive"],
+          "description": "Account active or deactivated status"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp of creation"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last update"
+        }
+      },
+      "required": ["uid", "name", "phone", "loginId", "role", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "AppUser",
+      "description": "Collection of staff user profiles"
+    },
+    "/categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Collection of product categories"
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Collection of all products sold in the POS"
+    },
+    "/customers/{customerId}": {
+      "schema": "Customer",
+      "description": "Collection of regular, restaurant and retail customers"
+    },
+    "/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Collection of completed and voided sales transactions"
+    },
+    "/held_tickets/{ticketId}": {
+      "schema": "HeldTicket",
+      "description": "Collection of temporarily held orders"
+    },
+    "/settings/{settingId}": {
+      "schema": "AppSettings",
+      "description": "Store configuration and receipt preferences"
+    }
+  }
+}

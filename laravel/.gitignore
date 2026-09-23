@@ -1,0 +1,34 @@
+/vendor/
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Laravel Storage, Local Caches & Firestore Cache
+/storage/app/*
+!/storage/app/.gitignore
+!/storage/app/public/.gitignore
+/storage/app/firestore_cache/
+/storage/app/firestore_cache/*
+/storage/*.key
+/storage/framework/cache/*
+/storage/framework/sessions/*
+/storage/framework/views/*
+/storage/logs/*
+!/storage/framework/cache/.gitignore
+!/storage/framework/sessions/.gitignore
+!/storage/framework/views/.gitignore
+!/storage/logs/.gitignore
+/bootstrap/cache/*
+!/bootstrap/cache/.gitignore
+
+# Environment files
+.env
+.env.backup
+.env.production
+
+# IDE & Build
+.phpunit.result.cache
+Homestead.json
+Homestead.yaml
+.vscode/
+.idea/

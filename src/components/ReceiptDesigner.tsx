@@ -58,10 +58,13 @@ export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({
     ],
     subtotal: 43.60,
     discount: 0,
-    totalAmount: 43.60,
+    deliveryFee: 5.00,
+    isDelivery: true,
+    deliveryNotes: 'Saujana Impian (One-Off)',
+    totalAmount: 48.60,
     paymentMethod: 'tunai',
     amountPaid: 50.00,
-    changeAmount: 6.40,
+    changeAmount: 1.40,
     cashierName: 'Khairul',
     status: 'completed',
   };
@@ -82,7 +85,7 @@ export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({
       const res = await onSaveConfig(config);
       if (res && res.success === false) {
         sound.playVoidBeep();
-        setSaveError(res.error || 'Gagal menyimpan reka bentuk resit ke Firebase.');
+        setSaveError(res.error || 'Gagal menyimpan reka bentuk resit ke pangkalan data.');
       } else {
         sound.playCashRegister();
         setSaveToast('✓ Reka bentuk resit berjaya disimpan secara kekal ke pangkalan data!');
@@ -576,6 +579,16 @@ export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({
                   </label>
 
                   <label className="flex items-center justify-between cursor-pointer">
+                    <span className="text-slate-300">Tunjuk Caj Penghantaran di Resit & PDF</span>
+                    <input
+                      type="checkbox"
+                      checked={config.showDeliveryFee ?? true}
+                      onChange={(e) => handleChange('showDeliveryFee', e.target.checked)}
+                      className="w-4 h-4 accent-emerald-500 cursor-pointer"
+                    />
+                  </label>
+
+                  <label className="flex items-center justify-between cursor-pointer">
                     <span className="text-slate-300">Tunjuk QR Code / WhatsApp Bawah Resit</span>
                     <input
                       type="checkbox"
@@ -698,11 +711,30 @@ export const ReceiptDesigner: React.FC<ReceiptDesignerProps> = ({
               ))}
             </div>
 
-            {/* Grand Total */}
+            {/* Subtotal, Delivery & Grand Total */}
             <div className="py-2 border-b-2 border-zinc-900 space-y-1">
-              <div className="flex justify-between font-black text-sm sm:text-base">
+              <div className="flex justify-between text-[10.5px] text-zinc-600">
+                <span>Subjumlah:</span>
+                <span className="font-mono">{formatCurrency(sampleTx.subtotal, config.currencySymbol)}</span>
+              </div>
+
+              {(config.showDeliveryFee ?? true) && (sampleTx.deliveryFee || 0) > 0 && (
+                <div>
+                  <div className="flex justify-between text-[10.5px] text-zinc-900 font-bold">
+                    <span>Caj Penghantaran:</span>
+                    <span className="font-mono">+{formatCurrency(sampleTx.deliveryFee || 0, config.currencySymbol)}</span>
+                  </div>
+                  {sampleTx.deliveryNotes && (
+                    <div className="text-[9.5px] text-zinc-500 italic pl-1">
+                      Nota: {sampleTx.deliveryNotes}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="flex justify-between font-black text-sm sm:text-base pt-1 border-t border-zinc-300">
                 <span>JUMLAH:</span>
-                <span>{formatCurrency(sampleTx.totalAmount, config.currencySymbol)}</span>
+                <span>{formatCurrency(sampleTx.subtotal + ((config.showDeliveryFee ?? true) ? (sampleTx.deliveryFee || 0) : 0), config.currencySymbol)}</span>
               </div>
 
               {config.showPaymentDetails && (

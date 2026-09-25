@@ -9,16 +9,23 @@ import {
   CheckCircle2, 
   SmartphoneNfc, 
   RotateCcw,
-  Zap
+  Zap,
+  Truck
 } from 'lucide-react';
 import { sound } from '../utils/audio';
 import confetti from 'canvas-confetti';
+import { DeliveryFeeModal } from './DeliveryFeeModal';
 
 interface PaymentModalProps {
   cartItems: CartItem[];
   customer: Customer;
   currencySymbol: string;
   paymentConfig: PaymentGatewayConfig;
+  deliveryFee?: number;
+  deliveryNotes?: string;
+  isOneOffDelivery?: boolean;
+  showDeliveryFeeOnReceipt?: boolean;
+  onUpdateDeliveryFee?: (fee: number, notes: string, isOneOff: boolean, showOnReceipt: boolean) => void;
   onCancel: () => void;
   onCompletePayment: (
     method: PaymentMethod,
@@ -32,10 +39,16 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   customer,
   currencySymbol,
   paymentConfig,
+  deliveryFee = 0,
+  deliveryNotes = '',
+  isOneOffDelivery = true,
+  showDeliveryFeeOnReceipt = true,
+  onUpdateDeliveryFee,
   onCancel,
   onCompletePayment,
 }) => {
   const [activeSubMode, setActiveSubMode] = useState<PaymentMethod | null>(null);
+  const [isDeliveryModalOpen, setIsDeliveryModalOpen] = useState<boolean>(false);
 
   // Cash calculation state
   const [cashTenderedStr, setCashTenderedStr] = useState<string>('');
@@ -43,17 +56,21 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   const [isQrSimulating, setIsQrSimulating] = useState<boolean>(false);
 
   const subtotal = useMemo(() => {
-    return cartItems.reduce((acc, it) => acc + it.totalPrice, 0);
+    const raw = cartItems.reduce((acc, it) => acc + it.totalPrice, 0);
+    return Math.round(raw * 100) / 100;
   }, [cartItems]);
 
   const discountAmount = useMemo(() => {
     if (customer.discountPercent && customer.discountPercent > 0) {
-      return (subtotal * customer.discountPercent) / 100;
+      return Math.round(((subtotal * customer.discountPercent) / 100) * 100) / 100;
     }
     return 0;
   }, [subtotal, customer.discountPercent]);
 
-  const totalAmount = Math.max(0, subtotal - discountAmount);
+  const totalAmount = useMemo(() => {
+    const rawTotal = Math.max(0, subtotal - discountAmount + (deliveryFee || 0));
+    return Math.round(rawTotal * 100) / 100;
+  }, [subtotal, discountAmount, deliveryFee]);
 
   // Cash Presets
   const cashSuggestions = useMemo(() => {
@@ -70,9 +87,21 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     return Array.from(set).sort((a, b) => a - b).slice(0, 5);
   }, [totalAmount]);
 
-  const tenderedAmount = parseFloat(cashTenderedStr) || 0;
-  const changeAmount = Math.max(0, tenderedAmount - totalAmount);
-  const isCashSufficient = tenderedAmount >= totalAmount;
+  const tenderedAmount = useMemo(() => {
+    const parsed = parseFloat(cashTenderedStr);
+    if (isNaN(parsed) || parsed < 0) return 0;
+    return Math.round(parsed * 100) / 100;
+  }, [cashTenderedStr]);
+
+  // Floating-point safe difference rounded to cents (2 decimal places)
+  const diff = useMemo(() => {
+    return Math.round((tenderedAmount - totalAmount) * 100) / 100;
+  }, [tenderedAmount, totalAmount]);
+
+  // Sufficient if diff is greater than or equal to 0 (with epsilon tolerance for floating-point)
+  const isCashSufficient = diff >= -0.001;
+  const changeAmount = isCashSufficient ? Math.max(0, diff) : 0;
+  const shortageAmount = !isCashSufficient ? Math.abs(diff) : 0;
 
   const triggerSuccessCelebration = () => {
     try {
@@ -184,9 +213,38 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
           {currencySymbol}
           {totalAmount.toFixed(2)}
         </span>
-        <span className="text-[11px] text-slate-400 mt-1">
-          {cartItems.length} item dalam senarai jualan
-        </span>
+        <div className="flex items-center gap-2 mt-1.5 flex-wrap justify-center text-[11px] text-slate-400">
+          <span>{cartItems.length} item</span>
+          {discountAmount > 0 && (
+            <span className="text-amber-400 font-medium">
+              • Diskaun: -{currencySymbol}{discountAmount.toFixed(2)}
+            </span>
+          )}
+          {(deliveryFee || 0) > 0 ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (onUpdateDeliveryFee) setIsDeliveryModalOpen(true);
+              }}
+              className={`font-bold bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 px-2.5 py-0.5 rounded-full flex items-center gap-1 ${
+                onUpdateDeliveryFee ? 'cursor-pointer hover:bg-cyan-500/25' : ''
+              }`}
+            >
+              <Truck className="w-3 h-3 text-cyan-400" />
+              <span>Caj Penghantaran: +{currencySymbol}{(deliveryFee || 0).toFixed(2)}</span>
+              {onUpdateDeliveryFee && <span className="text-[9px] underline opacity-80">(Ubah)</span>}
+            </button>
+          ) : onUpdateDeliveryFee ? (
+            <button
+              type="button"
+              onClick={() => setIsDeliveryModalOpen(true)}
+              className="text-slate-400 hover:text-cyan-300 font-medium bg-slate-800/80 px-2 py-0.5 rounded-full flex items-center gap-1 cursor-pointer transition text-[10px]"
+            >
+              <Truck className="w-3 h-3 text-slate-400" />
+              <span>+ Caj Penghantaran</span>
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {/* Mode 1: Main Method Selection Grid matching diagram */}
@@ -275,38 +333,54 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
               <div
                 className={`p-3 rounded-2xl border transition-all shadow-sm ${
                   isCashSufficient
-                    ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'
+                    ? changeAmount > 0
+                      ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'
+                      : 'bg-emerald-500/15 border-emerald-500/50 text-emerald-200'
                     : 'bg-rose-500/10 border-rose-500/40 text-rose-300'
                 }`}
               >
-                <div className="text-[10px] uppercase font-bold">
-                  {isCashSufficient ? 'Baki Pulangan' : 'Belum Cukup'}
+                <div className="text-[10px] uppercase font-bold flex items-center justify-between">
+                  <span>
+                    {isCashSufficient
+                      ? changeAmount > 0
+                        ? 'Baki Pulangan'
+                        : 'Bayaran Tepat'
+                      : 'Belum Cukup'}
+                  </span>
+                  {isCashSufficient && changeAmount === 0 && (
+                    <span className="text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-1.5 py-0.2 rounded font-bold">
+                      ✓ PAS
+                    </span>
+                  )}
                 </div>
                 <div className="text-2xl font-black font-mono mt-0.5">
                   {currencySymbol}
-                  {changeAmount.toFixed(2)}
+                  {isCashSufficient ? changeAmount.toFixed(2) : shortageAmount.toFixed(2)}
                 </div>
               </div>
             </div>
 
             {/* Quick Cash Presets */}
             <div className="grid grid-cols-5 gap-1.5">
-              {cashSuggestions.map((amt) => (
-                <button
-                  key={amt}
-                  onClick={() => {
-                    sound.playKeyBeep(600, 0.03);
-                    setCashTenderedStr(amt.toFixed(2));
-                  }}
-                  className={`py-2 rounded-xl font-mono font-bold text-xs border transition-all cursor-pointer active:scale-95 ${
-                    amt === totalAmount
-                      ? 'bg-emerald-600 border-emerald-400 text-white shadow-md'
-                      : 'bg-slate-800 hover:bg-slate-750 text-slate-200 border-slate-700'
-                  }`}
-                >
-                  {amt === totalAmount ? 'PAS' : `${currencySymbol}${amt}`}
-                </button>
-              ))}
+              {cashSuggestions.map((amt) => {
+                const isExact = Math.abs(amt - totalAmount) < 0.001;
+                return (
+                  <button
+                    key={amt}
+                    onClick={() => {
+                      sound.playKeyBeep(600, 0.03);
+                      setCashTenderedStr(amt.toFixed(2));
+                    }}
+                    className={`py-2 rounded-xl font-mono font-bold text-xs border transition-all cursor-pointer active:scale-95 ${
+                      isExact
+                        ? 'bg-emerald-600 border-emerald-400 text-white shadow-md'
+                        : 'bg-slate-800 hover:bg-slate-750 text-slate-200 border-slate-700'
+                    }`}
+                  >
+                    {isExact ? 'PAS' : `${currencySymbol}${amt}`}
+                  </button>
+                );
+              })}
             </div>
 
             {/* Numeric Keypad for Cash Tender */}
@@ -500,6 +574,22 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
           BATAL
         </button>
       </div>
+
+      {/* Delivery Fee Modal from Payment Screen */}
+      {onUpdateDeliveryFee && (
+        <DeliveryFeeModal
+          isOpen={isDeliveryModalOpen}
+          currentFee={deliveryFee}
+          currentNotes={deliveryNotes}
+          isOneOff={isOneOffDelivery}
+          showOnReceipt={showDeliveryFeeOnReceipt}
+          currencySymbol={currencySymbol}
+          onClose={() => setIsDeliveryModalOpen(false)}
+          onSaveDeliveryFee={(fee, notes, isOneOff, showOnReceipt) => {
+            onUpdateDeliveryFee(fee, notes, isOneOff, showOnReceipt);
+          }}
+        />
+      )}
     </div>
   );
 };

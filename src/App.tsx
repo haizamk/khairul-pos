@@ -11,7 +11,7 @@ import {
   PaymentMethod 
 } from './types';
 import { DEFAULT_CUSTOMERS } from './utils/storage';
-import { useFirebaseSync } from './context/FirebaseSyncContext';
+import { useApiSync } from './context/ApiSyncContext';
 import { sound } from './utils/audio';
 import { SunmiFrame } from './components/SunmiFrame';
 import { PosHeader } from './components/PosHeader';
@@ -44,7 +44,7 @@ type PosStep =
   | 'settings';
 
 export default function App() {
-  // Global Real-time Firebase Sync State
+  // Global API Sync State
   const {
     user,
     currentUserProfile,
@@ -68,7 +68,7 @@ export default function App() {
     reorderCategories,
     getNextInvoiceNo,
     resetAllData
-  } = useFirebaseSync();
+  } = useApiSync();
 
   // POS Workflow State
   const [currentStep, setCurrentStep] = useState<PosStep>('product_list');
@@ -93,6 +93,24 @@ export default function App() {
 
   // Active Completed Transaction for Receipt
   const [activeReceiptTx, setActiveReceiptTx] = useState<Transaction | null>(null);
+
+  // Delivery Fee States (Default: one-off per sale)
+  const [deliveryFee, setDeliveryFee] = useState<number>(0);
+  const [deliveryNotes, setDeliveryNotes] = useState<string>('');
+  const [isOneOffDelivery, setIsOneOffDelivery] = useState<boolean>(true);
+  const [showDeliveryFeeOnReceipt, setShowDeliveryFeeOnReceipt] = useState<boolean>(true);
+
+  const handleUpdateDeliveryFee = (
+    fee: number, 
+    notes: string, 
+    isOneOff: boolean, 
+    showOnReceipt: boolean = true
+  ) => {
+    setDeliveryFee(fee);
+    setDeliveryNotes(notes);
+    setIsOneOffDelivery(isOneOff);
+    setShowDeliveryFeeOnReceipt(showOnReceipt);
+  };
 
   // Overlay Modals
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState<boolean>(false);
@@ -170,7 +188,7 @@ export default function App() {
       unitPrice: enteredPrice,
       quantity,
       unit,
-      totalPrice: quantity * enteredPrice,
+      totalPrice: Math.round(quantity * enteredPrice * 100) / 100,
     };
 
     setCartItems((prev) => [...prev, newItem]);
@@ -186,7 +204,7 @@ export default function App() {
           ? {
               ...it,
               quantity: newQty,
-              totalPrice: newQty * it.unitPrice,
+              totalPrice: Math.round(newQty * it.unitPrice * 100) / 100,
             }
           : it
       )
@@ -201,10 +219,13 @@ export default function App() {
   // Handler: Clear entire cart
   const handleClearCart = () => {
     setCartItems([]);
+    setDeliveryFee(0);
+    setDeliveryNotes('');
+    setIsOneOffDelivery(true);
     setCurrentStep('product_list');
   };
 
-  // Handler: Hold / Park current ticket -> Real-time Firestore
+  // Handler: Hold / Park current ticket -> Database
   const handleHoldTicket = () => {
     if (cartItems.length === 0) return;
 
@@ -216,11 +237,19 @@ export default function App() {
       customer: selectedCustomer,
       items: [...cartItems],
       subtotal: cartItems.reduce((sum, it) => sum + it.totalPrice, 0),
+      deliveryFee: deliveryFee > 0 ? deliveryFee : undefined,
+      isDelivery: deliveryFee > 0,
+      deliveryNotes: deliveryNotes.trim() ? deliveryNotes.trim() : undefined,
+      showDeliveryFeeOnReceipt: deliveryFee > 0 ? showDeliveryFeeOnReceipt : undefined,
     };
 
     const updated = [...heldTickets, newHeldTicket];
     saveHeldTickets(updated);
     setCartItems([]);
+    setDeliveryFee(0);
+    setDeliveryNotes('');
+    setIsOneOffDelivery(true);
+    setShowDeliveryFeeOnReceipt(settings.receiptConfig?.showDeliveryFee ?? true);
     sound.playOkBeep();
     setCurrentStep('product_list');
   };
@@ -229,6 +258,10 @@ export default function App() {
   const handleRestoreTicket = (ticket: HeldTicket) => {
     setCartItems(ticket.items);
     setSelectedCustomer(ticket.customer);
+    setDeliveryFee(ticket.deliveryFee || 0);
+    setDeliveryNotes(ticket.deliveryNotes || '');
+    setIsOneOffDelivery(ticket.isDelivery ?? true);
+    setShowDeliveryFeeOnReceipt(ticket.showDeliveryFeeOnReceipt ?? (settings.receiptConfig?.showDeliveryFee ?? true));
     const updated = heldTickets.filter((t) => t.id !== ticket.id);
     saveHeldTickets(updated);
     setCurrentStep('ticket_view');
@@ -240,17 +273,18 @@ export default function App() {
     saveHeldTickets(updated);
   };
 
-  // Handler: Complete Payment -> Save Transaction to Real-time Firestore & Open Receipt
+  // Handler: Complete Payment -> Save Transaction to Database & Open Receipt
   const handleCompletePayment = (
     method: PaymentMethod,
     amountPaid: number,
     changeAmount: number
   ) => {
-    const subtotal = cartItems.reduce((acc, it) => acc + it.totalPrice, 0);
+    const subtotal = Math.round(cartItems.reduce((acc, it) => acc + it.totalPrice, 0) * 100) / 100;
     const discount = selectedCustomer.discountPercent
-      ? (subtotal * selectedCustomer.discountPercent) / 100
+      ? Math.round(((subtotal * selectedCustomer.discountPercent) / 100) * 100) / 100
       : 0;
-    const totalAmount = Math.max(0, subtotal - discount);
+    const currentFee = Math.round((deliveryFee || 0) * 100) / 100;
+    const totalAmount = Math.round(Math.max(0, subtotal - discount + currentFee) * 100) / 100;
 
     const invoiceNo = getNextInvoiceNo();
     const newTx: Transaction = {
@@ -261,6 +295,10 @@ export default function App() {
       items: [...cartItems],
       subtotal,
       discount,
+      deliveryFee: currentFee > 0 ? currentFee : undefined,
+      isDelivery: currentFee > 0,
+      deliveryNotes: deliveryNotes.trim() ? deliveryNotes.trim() : undefined,
+      showDeliveryFeeOnReceipt: currentFee > 0 ? showDeliveryFeeOnReceipt : undefined,
       totalAmount,
       paymentMethod: method,
       amountPaid,
@@ -274,10 +312,14 @@ export default function App() {
     saveTransaction(newTx);
     setActiveReceiptTx(newTx);
     setCartItems([]);
+    setDeliveryFee(0);
+    setDeliveryNotes('');
+    setIsOneOffDelivery(true);
+    setShowDeliveryFeeOnReceipt(settings.receiptConfig?.showDeliveryFee ?? true);
     setCurrentStep('receipt_view');
   };
 
-  // Handler: Void Transaction -> Real-time Firestore update
+  // Handler: Void Transaction -> Database update
   const handleVoidTransaction = (transactionId: string, reason: string) => {
     voidTransaction(transactionId, reason);
   };
@@ -443,6 +485,11 @@ export default function App() {
           cartItems={cartItems}
           customer={selectedCustomer}
           currencySymbol={settings.currency || 'RM'}
+          deliveryFee={deliveryFee}
+          deliveryNotes={deliveryNotes}
+          isOneOffDelivery={isOneOffDelivery}
+          showDeliveryFeeOnReceipt={showDeliveryFeeOnReceipt}
+          onUpdateDeliveryFee={handleUpdateDeliveryFee}
           onBackToProducts={() => setCurrentStep('product_list')}
           onClearCart={handleClearCart}
           onRemoveItem={handleRemoveItem}
@@ -460,6 +507,11 @@ export default function App() {
           customer={selectedCustomer}
           currencySymbol={settings.currency || 'RM'}
           paymentConfig={settings.paymentConfig}
+          deliveryFee={deliveryFee}
+          deliveryNotes={deliveryNotes}
+          isOneOffDelivery={isOneOffDelivery}
+          showDeliveryFeeOnReceipt={showDeliveryFeeOnReceipt}
+          onUpdateDeliveryFee={handleUpdateDeliveryFee}
           onCancel={() => setCurrentStep('ticket_view')}
           onCompletePayment={handleCompletePayment}
         />

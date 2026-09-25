@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useFirebaseSync } from '../context/FirebaseSyncContext';
+import { useApiSync } from '../context/ApiSyncContext';
 import { 
   LogIn, 
   Lock, 
@@ -35,7 +35,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     syncErrorMessage,
     settings,
     staffUsers
-  } = useFirebaseSync();
+  } = useApiSync();
 
   const [loginId, setLoginId] = useState('');
   const [password, setPassword] = useState('');

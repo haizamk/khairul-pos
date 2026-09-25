@@ -145,6 +145,26 @@ export function printReceiptWindow(
       <div class="divider"></div>
 
       <div>
+        ${(tx.discount > 0 || ((tx.deliveryFee || 0) > 0 && config.showDeliveryFee !== false)) ? `
+          <div class="flex-between" style="font-size: 0.88em; margin: 2px 0;">
+            <span>Subjumlah:</span>
+            <span>${formatCurrency(tx.subtotal || tx.totalAmount, config.currencySymbol)}</span>
+          </div>
+          ${tx.discount > 0 ? `
+            <div class="flex-between" style="font-size: 0.88em; margin: 2px 0; color: #333;">
+              <span>Diskaun (${tx.customer?.discountPercent || 0}%):</span>
+              <span>-${formatCurrency(tx.discount, config.currencySymbol)}</span>
+            </div>
+          ` : ''}
+          ${(tx.deliveryFee || 0) > 0 && (tx.showDeliveryFeeOnReceipt !== undefined ? tx.showDeliveryFeeOnReceipt : config.showDeliveryFee !== false) ? `
+            <div class="flex-between bold" style="font-size: 0.88em; margin: 2px 0;">
+              <span>Caj Penghantaran:</span>
+              <span>+${formatCurrency(tx.deliveryFee || 0, config.currencySymbol)}</span>
+            </div>
+            ${tx.deliveryNotes ? `<div style="font-size: 0.8em; color: #444; font-style: italic; margin-bottom: 2px;">Nota: ${tx.deliveryNotes}</div>` : ''}
+          ` : ''}
+          <div class="double-divider"></div>
+        ` : ''}
         <div class="flex-between" style="font-size: 1.15em; font-weight: 900; margin: 4px 0;">
           <span>JUMLAH BESAR:</span>
           <span>${formatCurrency(tx.totalAmount, config.currencySymbol)}</span>

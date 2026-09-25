@@ -180,6 +180,11 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                           {tx.paymentMethod}
                         </span>
                       )}
+                      {(tx.deliveryFee || 0) > 0 && (
+                        <span className="text-[10px] bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                          <span>🚚 Delivery: +{receiptConfig.currencySymbol}{(tx.deliveryFee || 0).toFixed(2)}</span>
+                        </span>
+                      )}
                       {tx.whatsappStatus === 'sent' && (
                         <span className="text-[10px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
                           <span>✓ WA Dihantar</span>
@@ -195,6 +200,11 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                       {date} • {time} • Pelanggan: <span className="text-slate-200 font-bold">{tx.customer.name}</span>
                       {tx.cashierName && (
                         <span> • Juruwang: <span className="text-slate-200 font-bold">{tx.cashierName}</span></span>
+                      )}
+                      {tx.deliveryNotes && (
+                        <div className="text-[10px] text-cyan-300 font-mono mt-0.5">
+                          Nota Penghantaran: {tx.deliveryNotes}
+                        </div>
                       )}
                     </div>
                   </div>

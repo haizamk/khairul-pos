@@ -265,6 +265,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     return activeTransactions.reduce((acc, tx) => acc + tx.totalAmount, 0);
   }, [activeTransactions]);
 
+  const deliveryFeesTotal = useMemo(() => {
+    return activeTransactions.reduce((acc, tx) => acc + (tx.deliveryFee || 0), 0);
+  }, [activeTransactions]);
+
   const voidedTotal = useMemo(() => {
     return voidedTransactions.reduce((acc, tx) => acc + tx.totalAmount, 0);
   }, [voidedTransactions]);
@@ -506,8 +510,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
             <div className="text-2xl sm:text-3xl font-black font-mono text-emerald-400">
               {formatCurrency(grossSales, receiptConfig.currencySymbol)}
             </div>
-            <div className="text-[10px] text-slate-500">
-              Daripada {activeTransactions.length} transaksi selesai
+            <div className="text-[10px] text-slate-500 flex items-center justify-between">
+              <span>Daripada {activeTransactions.length} transaksi selesai</span>
+              {deliveryFeesTotal > 0 && (
+                <span className="text-cyan-400 font-medium">🚚 Caj Delivery: {formatCurrency(deliveryFeesTotal, receiptConfig.currencySymbol)}</span>
+              )}
             </div>
           </div>
 

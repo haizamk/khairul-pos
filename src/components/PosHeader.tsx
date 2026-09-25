@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Customer, HeldTicket, ReceiptConfig } from '../types';
-import { useFirebaseSync } from '../context/FirebaseSyncContext';
+import { useApiSync } from '../context/ApiSyncContext';
 import { 
   Users, 
   Clock, 
@@ -51,7 +51,7 @@ export const PosHeader: React.FC<PosHeaderProps> = ({
   onOpenInstallGuide,
   onOpenLogin,
 }) => {
-  const { user, currentUserProfile, isMasterAdmin, logout } = useFirebaseSync();
+  const { user, currentUserProfile, isMasterAdmin, logout } = useApiSync();
   const [timeStr, setTimeStr] = useState('');
   const [showConfirmLogout, setShowConfirmLogout] = useState(false);
 

@@ -60,13 +60,19 @@ export const HeldTicketsModal: React.FC<HeldTicketsModalProps> = ({
                     <span className="text-[10px] bg-amber-500/10 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full font-mono font-bold">
                       {ticket.customer.name}
                     </span>
+                    {(ticket.deliveryFee || 0) > 0 && (
+                      <span className="text-[10px] bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 px-1.5 py-0.5 rounded font-mono font-bold">
+                        🚚 +{currencySymbol}{(ticket.deliveryFee || 0).toFixed(2)}
+                      </span>
+                    )}
                   </div>
                   <div className="text-[11px] text-slate-400 mt-1">
                     {ticket.items.length} item • {ticket.items.map((i) => i.name).slice(0, 2).join(', ')}
                     {ticket.items.length > 2 ? '...' : ''}
+                    {ticket.deliveryNotes ? ` • Nota: ${ticket.deliveryNotes}` : ''}
                   </div>
                   <div className="text-sm font-black font-mono text-emerald-400 mt-1">
-                    {formatCurrency(ticket.subtotal, currencySymbol)}
+                    {formatCurrency(ticket.subtotal + (ticket.deliveryFee || 0), currencySymbol)}
                   </div>
                 </div>
 

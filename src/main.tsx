@@ -1,13 +1,13 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
-import { FirebaseSyncProvider } from './context/FirebaseSyncContext.tsx';
+import { ApiSyncProvider } from './context/ApiSyncContext.tsx';
 import './index.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <FirebaseSyncProvider>
+    <ApiSyncProvider>
       <App />
-    </FirebaseSyncProvider>
+    </ApiSyncProvider>
   </StrictMode>,
 );

@@ -75,6 +75,7 @@ export async function generateReceiptPdf(
     145,
     75 + tx.items.length * 10 + 
     logoHeightBuffer +
+    ((tx.deliveryFee || 0) > 0 ? 12 : 0) +
     (config.footerMessage ? 20 : 0) + 
     (config.address ? 15 : 0) + 
     (tx.status === 'voided' ? 15 : 0) +
@@ -298,17 +299,41 @@ export async function generateReceiptPdf(
   doc.setLineDashPattern([], 0);
   y += 4;
 
-  // Subtotal & Discount
-  if ((tx.discount || 0) > 0) {
+  // Subtotal, Discount & Delivery Fee
+  const showDelivery = tx.showDeliveryFeeOnReceipt !== undefined ? tx.showDeliveryFeeOnReceipt : (config.showDeliveryFee !== false);
+  const hasDelivery = (tx.deliveryFee || 0) > 0 && showDelivery;
+  const hasSubtotalBreakdown = (tx.discount || 0) > 0 || hasDelivery;
+
+  if (hasSubtotalBreakdown) {
     doc.setFontSize(8);
     doc.setFont('courier', 'normal');
     doc.text('Subjumlah:', margin, y);
     doc.text(formatCurrency(tx.subtotal || tx.totalAmount || 0, config.currencySymbol), widthMm - margin, y, { align: 'right' });
     y += 3.5;
 
-    doc.text(`Diskaun (${tx.customer?.discountPercent || 0}%):`, margin, y);
-    doc.text(`-${formatCurrency(tx.discount || 0, config.currencySymbol)}`, widthMm - margin, y, { align: 'right' });
-    y += 3.8;
+    if ((tx.discount || 0) > 0) {
+      doc.text(`Diskaun (${tx.customer?.discountPercent || 0}%):`, margin, y);
+      doc.text(`-${formatCurrency(tx.discount || 0, config.currencySymbol)}`, widthMm - margin, y, { align: 'right' });
+      y += 3.8;
+    }
+
+    if (hasDelivery) {
+      doc.setFont('courier', 'bold');
+      doc.text('Caj Penghantaran:', margin, y);
+      doc.text(`+${formatCurrency(tx.deliveryFee || 0, config.currencySymbol)}`, widthMm - margin, y, { align: 'right' });
+      doc.setFont('courier', 'normal');
+      y += 3.5;
+
+      if (tx.deliveryNotes) {
+        doc.setFontSize(7);
+        doc.setFont('courier', 'italic');
+        const noteLines = doc.splitTextToSize(`Nota: ${tx.deliveryNotes}`, contentWidth);
+        doc.text(noteLines, margin, y);
+        y += noteLines.length * 3.0;
+        doc.setFontSize(8);
+        doc.setFont('courier', 'normal');
+      }
+    }
   }
 
   // Grand Total

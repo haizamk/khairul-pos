@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { AppUser, UserRole, UserStatus } from '../types';
-import { useFirebaseSync } from '../context/FirebaseSyncContext';
+import { useApiSync } from '../context/ApiSyncContext';
 import { 
   Users, 
   UserPlus, 
@@ -36,7 +36,7 @@ export const StaffManagementTab: React.FC<StaffManagementTabProps> = () => {
     updateStaffUser,
     toggleStaffStatus,
     deleteStaffUser
-  } = useFirebaseSync();
+  } = useApiSync();
 
   const [roleFilter, setRoleFilter] = useState<'all' | 'admin' | 'cashier'>('all');
   const [searchQuery, setSearchQuery] = useState('');

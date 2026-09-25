@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Transaction, ReceiptConfig, Customer } from '../types';
-import { useFirebaseSync } from '../context/FirebaseSyncContext';
+import { useApiSync } from '../context/ApiSyncContext';
 import { generateReceiptPdf, normalizeWhatsAppPhone, isValidWhatsAppPhone } from '../utils/pdfReceiptGenerator';
 import { formatCurrency, formatDateTime } from '../utils/receiptPrinter';
 import { sound } from '../utils/audio';
@@ -38,7 +38,7 @@ export const WhatsAppReceiptModal: React.FC<WhatsAppReceiptModalProps> = ({
   receiptConfig,
   onClose,
 }) => {
-  const { saveCustomer, updateTransactionWhatsAppStatus, settings, saveFonnteToken, isAdmin } = useFirebaseSync();
+  const { saveCustomer, updateTransactionWhatsAppStatus, settings, saveFonnteToken, isAdmin } = useApiSync();
 
   const [phone, setPhone] = useState<string>('');
   const [savePhoneToCustomer, setSavePhoneToCustomer] = useState<boolean>(false);
@@ -84,6 +84,8 @@ export const WhatsAppReceiptModal: React.FC<WhatsAppReceiptModalProps> = ({
         return `${idx + 1}. *${item.name || 'Barang'}*\n   ${qtyStr} × ${formatCurrency(uPrice, receiptConfig.currencySymbol)} = *${formatCurrency(tPrice, receiptConfig.currencySymbol)}*`;
       }).join('\n');
 
+      const showDelivery = transaction.showDeliveryFeeOnReceipt !== undefined ? transaction.showDeliveryFeeOnReceipt : (receiptConfig.showDeliveryFee !== false);
+
       const defaultMsg = `🧾 *RESIT PEMBELIAN RASMI*\n*${receiptConfig.companyName || 'KHAIRUL FRESH AND FROZEN FOOD'}*\n\n` +
         `Salam Sejahtera *${custName}*,\n` +
         `Terima kasih kerana membeli bersama kami.\n\n` +
@@ -95,10 +97,12 @@ export const WhatsAppReceiptModal: React.FC<WhatsAppReceiptModalProps> = ({
         `📦 *SENARAI BARANGAN:*\n` +
         `${itemsList}\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
+        (transaction.subtotal && (transaction.discount || (showDelivery && transaction.deliveryFee)) ? `💵 *Subjumlah:* ${formatCurrency(transaction.subtotal, receiptConfig.currencySymbol)}\n` : '') +
+        (transaction.discount ? `🏷️ *Diskaun:* -${formatCurrency(transaction.discount, receiptConfig.currencySymbol)}\n` : '') +
+        (showDelivery && (transaction.deliveryFee || 0) > 0 ? `🚚 *Caj Penghantaran:* ${formatCurrency(transaction.deliveryFee || 0, receiptConfig.currencySymbol)}${transaction.deliveryNotes ? ` (Nota: ${transaction.deliveryNotes})` : ''}\n` : '') +
         `💰 *JUMLAH: ${formatCurrency(transaction.totalAmount, receiptConfig.currencySymbol)}*\n` +
-        (transaction.discountAmount ? `🏷️ *Diskaun:* -${formatCurrency(transaction.discountAmount, receiptConfig.currencySymbol)}\n` : '') +
-        (transaction.cashTendered ? `💵 *Tunai Diterima:* ${formatCurrency(transaction.cashTendered, receiptConfig.currencySymbol)}\n` : '') +
-        (transaction.changeDue ? `🪙 *Baki:* ${formatCurrency(transaction.changeDue, receiptConfig.currencySymbol)}\n` : '') +
+        (transaction.amountPaid ? `💵 *Tunai Diterima:* ${formatCurrency(transaction.amountPaid, receiptConfig.currencySymbol)}\n` : '') +
+        (transaction.changeAmount ? `🪙 *Baki:* ${formatCurrency(transaction.changeAmount, receiptConfig.currencySymbol)}\n` : '') +
         `━━━━━━━━━━━━━━━━━━━━\n\n` +
         `🙏 _${receiptConfig.footerMessage || 'Terima kasih atas sokongan anda!'}_`;
       
@@ -211,7 +215,7 @@ export const WhatsAppReceiptModal: React.FC<WhatsAppReceiptModalProps> = ({
     setWebShareTip('Fail PDF resit telah dimuat turun secara automatik. Sila tekan ikon lampiran klip kertas (📎) di WhatsApp untuk sertakan PDF kepada pelanggan.');
   };
 
-  // Handler: Send via Fonnte Server API
+  // Handler: Send via Fonnte Server API or Direct Client CORS
   const handleSendViaFonnte = async () => {
     if (!normalizedPhone) {
       sound.playVoidBeep();
@@ -232,13 +236,6 @@ export const WhatsAppReceiptModal: React.FC<WhatsAppReceiptModalProps> = ({
       const pdfBlob = getBlob();
       const pdfBase64 = getBase64();
 
-      // 11. Diagnostic logging (client-side)
-      console.log('=== [DIAGNOSTIC] WHATSAPP RECEIPT CLIENT ===');
-      console.log('PDF Filename:', filename);
-      console.log('PDF Blob Size (bytes):', pdfBlob.size);
-      console.log('PDF MIME Type:', pdfBlob.type || 'application/pdf');
-      console.log('============================================');
-
       // Step 2: Auto-save phone to customer profile if checked
       if (savePhoneToCustomer && transaction.customer && transaction.customer.id !== 'c1') {
         try {
@@ -251,71 +248,158 @@ export const WhatsAppReceiptModal: React.FC<WhatsAppReceiptModalProps> = ({
         }
       }
 
-      // Step 3: Create multipart/form-data payload containing the binary PDF
-      const formData = new FormData();
-      formData.append('file', pdfBlob, filename);
-      formData.append('phone', normalizedPhone);
-      formData.append('message', customMessage);
-      formData.append('filename', filename);
-      formData.append('transactionId', transaction.id);
-      formData.append('invoiceNo', transaction.invoiceNo);
-      // Fallback base64 string in case environment strips binary
-      formData.append('pdfBase64', pdfBase64);
-      
-      if (fonnteToken && fonnteToken.trim()) {
-        formData.append('token', fonnteToken.trim());
+      // Step 3: Format phone number for Fonnte (e.g. 60123456789)
+      let cleanPhone = normalizedPhone.replace(/[^\d]/g, '');
+      if (cleanPhone.startsWith('0')) {
+        cleanPhone = '60' + cleanPhone.substring(1);
       }
 
-      // Step 4: Call Server-Side Route using multipart/form-data
-      const response = await fetch('/api/whatsapp/receipt', {
-        method: 'POST',
-        body: formData
-      });
+      const activeToken = (fonnteToken && fonnteToken.trim()) || (settings.fonnteToken && settings.fonnteToken.trim()) || '';
 
-      const result = await response.json();
+      let sendSuccess = false;
+      let sendWarning = false;
+      let warningReason = '';
+      let failureReason = '';
 
-      if (response.ok && result.success) {
-        if (result.status === 'warning' || result.pdfAttached === false) {
-          sound.playVoidBeep();
-          const warningMsg = result.reason 
-            ? `⚠️ Mesej WhatsApp berjaya dihantar, tetapi PDF gagal dilampirkan.\n\n${result.reason}`
-            : '⚠️ Mesej WhatsApp berjaya dihantar, tetapi PDF resit gagal dilampirkan.';
-            
-          setSendResult({
-            status: 'failed',
-            message: warningMsg
+      // PRIORITY 1: If client has the Fonnte token, send directly to Fonnte API (api.fonnte.com)
+      // This bypasses any Nginx auth bridge redirects, WebAPK iframe cookies, or container sleep issues.
+      if (activeToken) {
+        try {
+          console.log('[WhatsApp] Sending directly to Fonnte API...');
+          const directForm = new FormData();
+          directForm.append('target', cleanPhone);
+          directForm.append('message', customMessage);
+          directForm.append('countryCode', '60');
+          directForm.append('filename', filename);
+          directForm.append('file', pdfBlob, filename);
+
+          const fonnteRes = await fetch('https://api.fonnte.com/send', {
+            method: 'POST',
+            headers: {
+              Authorization: activeToken,
+            },
+            body: directForm,
           });
+
+          const fonnteText = await fonnteRes.text();
+          let resJson: any = {};
           try {
-            await updateTransactionWhatsAppStatus(transaction.id, 'failed', normalizedPhone, result.reason || 'PDF resit gagal dilampirkan.');
-          } catch (e) {
-            console.warn('Status update sync note:', e);
+            resJson = JSON.parse(fonnteText);
+          } catch {
+            resJson = { raw: fonnteText };
+          }
+
+          console.log('[WhatsApp] Direct Fonnte API response:', resJson);
+
+          if (fonnteRes.ok && (resJson.status === true || resJson.status === 'true' || resJson.status === 'success')) {
+            if (Array.isArray(resJson.id) && resJson.id.length === 0) {
+              failureReason = resJson.reason || resJson.detail || 'Fonnte meluluskan mesej tetapi tiada ID giliran diterima.';
+            } else {
+              sendSuccess = true;
+            }
+          } else {
+            const rawReason = String(resJson.reason || resJson.detail || resJson.message || `Ralat status ${fonnteRes.status}`);
+            failureReason = rawReason;
+            if (rawReason.toLowerCase().includes('token') || rawReason.toLowerCase().includes('invalid') || rawReason.toLowerCase().includes('unauthorized')) {
+              setShowTokenConfig(true);
+              failureReason = 'Token Fonnte tidak sah. Sila semak Device Token anda di fonnte.com.';
+            } else if (rawReason.toLowerCase().includes('device disconnected')) {
+              failureReason = 'Peranti WhatsApp anda di Fonnte terputus sambungan. Sila imbas semula QR code di fonnte.com.';
+            }
+          }
+        } catch (directErr: any) {
+          console.warn('[WhatsApp] Direct Fonnte send failed, trying backend route:', directErr);
+          // Don't set failureReason yet, fallback to backend proxy below
+        }
+      }
+
+      // PRIORITY 2: If direct sending wasn't used or had network error, call backend route /api/whatsapp/receipt
+      if (!sendSuccess && !failureReason) {
+        console.log('[WhatsApp] Sending via backend proxy /api/whatsapp/receipt...');
+        const formData = new FormData();
+        formData.append('file', pdfBlob, filename);
+        formData.append('phone', normalizedPhone);
+        formData.append('message', customMessage);
+        formData.append('filename', filename);
+        formData.append('transactionId', transaction.id);
+        formData.append('invoiceNo', transaction.invoiceNo);
+        formData.append('pdfBase64', pdfBase64);
+        if (activeToken) {
+          formData.append('token', activeToken);
+        }
+
+        const response = await fetch('/api/whatsapp/receipt', {
+          method: 'POST',
+          credentials: 'include',
+          body: formData
+        });
+
+        const rawText = await response.text();
+        let result: any = null;
+        if (!rawText.trim().startsWith('<') && !rawText.trim().startsWith('<!')) {
+          try {
+            result = JSON.parse(rawText);
+          } catch {
+            result = null;
+          }
+        }
+
+        if (!result) {
+          // HTML response received from proxy/warmup/cookie check
+          setShowTokenConfig(true);
+          throw new Error(
+            'Sesi pelayan memerlukan Device Token Fonnte. Sila masukkan Token Fonnte di bawah untuk menghantar secara terus.'
+          );
+        }
+
+        if (response.ok && result.success) {
+          if (result.status === 'warning' || result.pdfAttached === false) {
+            sendWarning = true;
+            warningReason = result.reason 
+              ? `⚠️ Mesej WhatsApp berjaya dihantar, tetapi PDF gagal dilampirkan.\n\n${result.reason}`
+              : '⚠️ Mesej WhatsApp berjaya dihantar, tetapi PDF resit gagal dilampirkan.';
+          } else {
+            sendSuccess = true;
           }
         } else {
-          sound.playOkBeep();
-          setSendResult({
-            status: 'success',
-            message: 'Resit PDF berjaya dihantar ke WhatsApp pelanggan!'
-          });
-          // Update Firestore transaction WhatsApp status safely
-          try {
-            await updateTransactionWhatsAppStatus(transaction.id, 'sent', normalizedPhone);
-          } catch (e) {
-            console.warn('Status update sync note:', e);
+          failureReason = result.message || 'Gagal menghantar melalui pelayan Fonnte.';
+          if (result.fonnteConfigured === false || !activeToken) {
+            setShowTokenConfig(true);
           }
+        }
+      }
+
+      // Final processing of results
+      if (sendSuccess) {
+        sound.playOkBeep();
+        setSendResult({
+          status: 'success',
+          message: 'Resit PDF berjaya dihantar ke WhatsApp pelanggan!'
+        });
+        try {
+          await updateTransactionWhatsAppStatus(transaction.id, 'sent', normalizedPhone);
+        } catch (e) {
+          console.warn('Status update sync note:', e);
+        }
+      } else if (sendWarning) {
+        sound.playVoidBeep();
+        setSendResult({
+          status: 'failed',
+          message: warningReason
+        });
+        try {
+          await updateTransactionWhatsAppStatus(transaction.id, 'failed', normalizedPhone, warningReason);
+        } catch (e) {
+          console.warn('Status update sync note:', e);
         }
       } else {
         sound.playVoidBeep();
-        let errMsg = result.message || 'Gagal menghantar melalui pelayan Fonnte.';
-        if (result.fonnteConfigured === false || !fonnteToken.trim()) {
-          setShowTokenConfig(true);
-        }
         setSendResult({
           status: 'failed',
-          message: errMsg
+          message: failureReason || 'Gagal menghantar WhatsApp.'
         });
-        // Update Firestore transaction WhatsApp status safely
         try {
-          await updateTransactionWhatsAppStatus(transaction.id, 'failed', normalizedPhone, errMsg);
+          await updateTransactionWhatsAppStatus(transaction.id, 'failed', normalizedPhone, failureReason);
         } catch (e) {
           console.warn('Status update sync note:', e);
         }
@@ -323,8 +407,8 @@ export const WhatsAppReceiptModal: React.FC<WhatsAppReceiptModalProps> = ({
     } catch (err: any) {
       sound.playVoidBeep();
       console.error('WhatsApp send request error:', err);
-      let errMsg = 'Ralat sambungan ke pelayan semasa menghantar WhatsApp.';
-      if (typeof err?.message === 'string' && !err.message.includes('{')) {
+      let errMsg = 'Ralat sambungan semasa menghantar WhatsApp.';
+      if (typeof err?.message === 'string' && !err.message.includes('{') && !err.message.includes('<')) {
         errMsg = err.message;
       }
       setSendResult({

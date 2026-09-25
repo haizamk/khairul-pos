@@ -62,6 +62,10 @@ export interface Transaction {
   items: CartItem[];
   subtotal: number;
   discount: number;
+  deliveryFee?: number;
+  isDelivery?: boolean;
+  deliveryNotes?: string;
+  showDeliveryFeeOnReceipt?: boolean;
   totalAmount: number;
   paymentMethod: PaymentMethod;
   amountPaid: number;
@@ -88,6 +92,10 @@ export interface HeldTicket {
   customer: Customer;
   items: CartItem[];
   subtotal: number;
+  deliveryFee?: number;
+  isDelivery?: boolean;
+  deliveryNotes?: string;
+  showDeliveryFeeOnReceipt?: boolean;
 }
 
 export interface ReceiptConfig {
@@ -108,6 +116,7 @@ export interface ReceiptConfig {
   showCashier: boolean;
   showCustomer: boolean;
   showPaymentDetails: boolean;
+  showDeliveryFee?: boolean;
   showQrCode: boolean;
   qrCodeUrl: string;
   currencySymbol: string;

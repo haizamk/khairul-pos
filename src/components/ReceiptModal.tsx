@@ -14,7 +14,10 @@ import {
   Fish,
   ShoppingBag,
   Download,
-  MessageSquare
+  MessageSquare,
+  Truck,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { formatCurrency, formatDateTime, printReceiptWindow } from '../utils/receiptPrinter';
 import { generateReceiptPdf } from '../utils/pdfReceiptGenerator';
@@ -42,13 +45,37 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string | null>(null);
 
+  // Delivery fee visibility toggle (can be turned ON/OFF on the fly for receipts & PDF)
+  const initialShowDelivery = transaction.showDeliveryFeeOnReceipt !== undefined
+    ? transaction.showDeliveryFeeOnReceipt
+    : (receiptConfig.showDeliveryFee !== false);
+  const [showDeliveryFee, setShowDeliveryFee] = useState<boolean>(initialShowDelivery);
+
+  useEffect(() => {
+    if (transaction.showDeliveryFeeOnReceipt !== undefined) {
+      setShowDeliveryFee(transaction.showDeliveryFeeOnReceipt);
+    } else {
+      setShowDeliveryFee(receiptConfig.showDeliveryFee !== false);
+    }
+  }, [transaction.id, transaction.showDeliveryFeeOnReceipt, receiptConfig.showDeliveryFee]);
+
+  const effectiveTransaction: Transaction = {
+    ...transaction,
+    showDeliveryFeeOnReceipt: showDeliveryFee,
+  };
+
+  const effectiveReceiptConfig: ReceiptConfig = {
+    ...receiptConfig,
+    showDeliveryFee: showDeliveryFee,
+  };
+
   // Generate QR code data URL once upon mount / config change
   useEffect(() => {
     let active = true;
     const generateQr = async () => {
       if (receiptConfig.showQrCode) {
         try {
-          const url = await generateReceiptQrCodeUrl(transaction, receiptConfig);
+          const url = await generateReceiptQrCodeUrl(effectiveTransaction, effectiveReceiptConfig);
           if (active) {
             setQrCodeDataUrl(url);
           }
@@ -61,10 +88,10 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
     return () => {
       active = false;
     };
-  }, [transaction, receiptConfig]);
+  }, [transaction, receiptConfig, showDeliveryFee]);
 
   const handlePrint = () => {
-    printReceiptWindow(transaction, receiptConfig, { 
+    printReceiptWindow(effectiveTransaction, effectiveReceiptConfig, { 
       printSoundEnabled, 
       qrCodeDataUrl: qrCodeDataUrl || undefined 
     });
@@ -78,7 +105,7 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   const handleDownloadPdf = async () => {
     sound.playKeyBeep(550, 0.04);
     try {
-      const { doc, filename } = await generateReceiptPdf(transaction, receiptConfig, {
+      const { doc, filename } = await generateReceiptPdf(effectiveTransaction, effectiveReceiptConfig, {
         qrCodeDataUrl: qrCodeDataUrl || undefined
       });
       doc.save(filename);
@@ -120,6 +147,48 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
           {transaction.invoiceNo}
         </span>
       </div>
+
+      {/* Quick Toggle for Delivery Fee Display in Receipt & PDF */}
+      {(transaction.deliveryFee || 0) > 0 && (
+        <div className="px-4 py-2 bg-slate-800/95 border-b border-slate-750 flex items-center justify-between gap-3 shadow-md">
+          <div className="flex items-center gap-2 min-w-0">
+            <Truck className="w-4 h-4 text-cyan-400 shrink-0" />
+            <div className="min-w-0">
+              <span className="text-xs font-bold text-slate-200">Caj Penghantaran:</span>
+              <span className="text-xs font-mono font-bold text-cyan-300 ml-1.5">
+                +{receiptConfig.currencySymbol}{(transaction.deliveryFee || 0).toFixed(2)}
+              </span>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            id="toggle-delivery-fee-receipt-btn"
+            onClick={() => {
+              sound.playKeyBeep(600, 0.04);
+              setShowDeliveryFee((prev) => !prev);
+            }}
+            className={`px-3 py-1 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 shrink-0 ${
+              showDeliveryFee
+                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 hover:bg-cyan-500/30'
+                : 'bg-slate-700/80 text-slate-300 border-slate-600 hover:bg-slate-700'
+            }`}
+            title="Klik untuk togol sama ada baris caj penghantaran dipaparkan di resit cetak dan PDF"
+          >
+            {showDeliveryFee ? (
+              <>
+                <Eye className="w-3.5 h-3.5 text-cyan-300" />
+                <span>Papar di Resit (ON)</span>
+              </>
+            ) : (
+              <>
+                <EyeOff className="w-3.5 h-3.5 text-slate-400" />
+                <span>Sembunyi di Resit (OFF)</span>
+              </>
+            )}
+          </button>
+        </div>
+      )}
 
       {/* Realistic Sunmi Thermal Paper Slip Preview */}
       <div className="flex-1 overflow-y-auto p-4 flex flex-col items-center justify-start bg-slate-950/60 scrollbar-thin scrollbar-thumb-slate-700">
@@ -224,9 +293,41 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
             ))}
           </div>
 
-          {/* Grand Total */}
+          {/* Subtotal, Discount, Delivery & Grand Total */}
           <div className="py-2 border-b-2 border-slate-900 space-y-1">
-            <div className="flex justify-between font-black text-base sm:text-lg">
+            <div className="flex justify-between text-xs text-slate-700">
+              <span>Subjumlah:</span>
+              <span className="font-mono font-medium">
+                {formatCurrency(transaction.subtotal || transaction.totalAmount, receiptConfig.currencySymbol)}
+              </span>
+            </div>
+
+            {transaction.discount > 0 && (
+              <div className="flex justify-between text-xs text-rose-600">
+                <span>Diskaun ({transaction.customer.discountPercent || 0}%):</span>
+                <span className="font-mono font-medium">
+                  -{formatCurrency(transaction.discount, receiptConfig.currencySymbol)}
+                </span>
+              </div>
+            )}
+
+            {(transaction.deliveryFee || 0) > 0 && showDeliveryFee && (
+              <div>
+                <div className="flex justify-between text-xs text-slate-900 font-bold">
+                  <span>Caj Penghantaran:</span>
+                  <span className="font-mono">
+                    +{formatCurrency(transaction.deliveryFee || 0, receiptConfig.currencySymbol)}
+                  </span>
+                </div>
+                {transaction.deliveryNotes && (
+                  <div className="text-[10px] text-slate-500 italic pl-1">
+                    Nota: {transaction.deliveryNotes}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-between font-black text-base sm:text-lg pt-1 border-t border-slate-300">
               <span>JUMLAH:</span>
               <span>{formatCurrency(transaction.totalAmount, receiptConfig.currencySymbol)}</span>
             </div>
@@ -334,8 +435,8 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
       {/* WhatsApp Delivery Modal */}
       <WhatsAppReceiptModal
         isOpen={isWhatsAppModalOpen}
-        transaction={transaction}
-        receiptConfig={receiptConfig}
+        transaction={effectiveTransaction}
+        receiptConfig={effectiveReceiptConfig}
         onClose={() => setIsWhatsAppModalOpen(false)}
       />
     </div>

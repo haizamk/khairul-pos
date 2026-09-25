@@ -1,10 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Product, Customer, AppSettings, UnitType, PaymentGatewayConfig, Category } from '../types';
 import { DEFAULT_CATEGORIES } from '../utils/storage';
-import { useFirebaseSync } from '../context/FirebaseSyncContext';
+import { useApiSync } from '../context/ApiSyncContext';
 import { StaffManagementTab } from './StaffManagementTab';
-import { EmailAuthProvider, reauthenticateWithCredential, updatePassword } from 'firebase/auth';
-import { auth } from '../utils/firebase';
 import { 
   Settings, 
   Lock, 
@@ -307,37 +305,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setPasswordChangeLoading(true);
 
     try {
-      if (!auth.currentUser) {
+      if (!currentUserProfile?.uid && !(currentUserProfile as any)?.id) {
         throw new Error('Sesi tidak aktif atau tiada pengguna log masuk.');
       }
 
-      const email = auth.currentUser.email || '';
-      if (!email) {
-        throw new Error('Gagal mengenal pasti akaun e-mel.');
+      const activeUserId = currentUserProfile.uid || (currentUserProfile as any).id;
+      const res = await updateStaffUser(activeUserId, { newPassword: newPasswordInput });
+
+      if (res.success) {
+        setPasswordChangeSuccess(true);
+        setCurrentPasswordInput('');
+        setNewPasswordInput('');
+        setConfirmPasswordInput('');
+        sound.playOkBeep();
+      } else {
+        throw new Error(res.error || 'Gagal menukar kata laluan.');
       }
-
-      // Reauthenticate first
-      const credential = EmailAuthProvider.credential(email, currentPasswordInput);
-      await reauthenticateWithCredential(auth.currentUser, credential);
-
-      // Reauthentication succeeded, now update password in Firebase Auth
-      await updatePassword(auth.currentUser, newPasswordInput);
-
-      setPasswordChangeSuccess(true);
-      setCurrentPasswordInput('');
-      setNewPasswordInput('');
-      setConfirmPasswordInput('');
-      sound.playOkBeep();
     } catch (err: any) {
       console.error('Password change failed:', err);
-      const code = err?.code || '';
-      if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
-        setPasswordChangeError('Kata laluan semasa salah.');
-      } else if (code === 'auth/weak-password') {
-        setPasswordChangeError('Kata laluan baharu terlalu lemah.');
-      } else {
-        setPasswordChangeError(err?.message || 'Gagal menukar kata laluan.');
-      }
+      setPasswordChangeError(err?.message || 'Gagal menukar kata laluan.');
       sound.playVoidBeep();
     } finally {
       setPasswordChangeLoading(false);
@@ -377,15 +363,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     syncErrorMessage,
     loginWithGoogle, 
     logout, 
-    seedFirestoreDefaults, 
+    seedDbDefaults, 
     lastSyncedAt,
     categories,
     saveCategory,
     editCategory,
     deleteCategory,
     reorderCategoriesList,
-    saveFonnteToken
-  } = useFirebaseSync();
+    saveFonnteToken,
+    updateStaffUser
+  } = useApiSync();
 
   useEffect(() => {
     if (
@@ -419,12 +406,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         sound.playOkBeep();
         setTimeout(() => setFonnteSaveSuccess(false), 4000);
       } else {
-        setFonnteSaveError(res.error || 'Gagal menyimpan Token Fonnte ke Firebase.');
+        setFonnteSaveError(res.error || 'Gagal menyimpan Token Fonnte ke pangkalan data.');
         sound.playVoidBeep();
       }
     } catch (err: any) {
       console.error('Error saving Fonnte token:', err);
-      setFonnteSaveError(err?.message || 'Ralat Firebase semasa menyimpan token.');
+      setFonnteSaveError(err?.message || 'Ralat pelayan semasa menyimpan token.');
       sound.playVoidBeep();
     } finally {
       setIsSavingFonnteToken(false);
@@ -482,13 +469,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleSeedDefaults = async () => {
     setIsSeeding(true);
-    setSeedStatus('Menyegerakkan data ke Firestore...');
+    setSeedStatus('Menyegerakkan data ke pangkalan data MySQL...');
     try {
-      await seedFirestoreDefaults();
-      setSeedStatus('Berjaya disegerakkan ke Firebase Firestore!');
+      await seedDbDefaults();
+      setSeedStatus('Berjaya disegerakkan ke pangkalan data MySQL!');
       sound.playOkBeep();
     } catch (err) {
-      setSeedStatus('Ralat semasa menyegerak ke Firestore.');
+      setSeedStatus('Ralat semasa menyegerak data.');
       sound.playVoidBeep();
     } finally {
       setIsSeeding(false);
@@ -1280,7 +1267,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <ListOrdered className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                     <div className="text-xs text-slate-300">
                       <span className="font-bold text-emerald-300">SUSUNAN PRODUK POS: </span>
-                      Tarik baris menggunakan ikon <span className="font-mono text-emerald-400 font-bold">☰</span> atau tekan butang <span className="font-bold text-white">▲ / ▼</span> untuk mengubah susunan. Kedudukan ini akan disimpan terus ke Cloud Firestore.
+                      Tarik baris menggunakan ikon <span className="font-mono text-emerald-400 font-bold">☰</span> atau tekan butang <span className="font-bold text-white">▲ / ▼</span> untuk mengubah susunan. Kedudukan ini akan disimpan terus ke pangkalan data MySQL.
                     </div>
                   </div>
 
@@ -2194,7 +2181,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   {fonnteSaveSuccess && (
                     <div className="text-emerald-400 font-bold text-xs flex items-center gap-1.5 bg-emerald-950/40 p-2.5 rounded-xl border border-emerald-800/60 mt-2">
                       <CheckCircle className="w-4 h-4 shrink-0" />
-                      <span>✓ Fonnte API Token berjaya disimpan ke pangkalan data Firebase!</span>
+                      <span>✓ Fonnte API Token berjaya disimpan ke pangkalan data MySQL!</span>
                     </div>
                   )}
 
@@ -2242,7 +2229,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
               </div>
 
-              {/* Firebase Cloud Firestore Section */}
+              {/* MySQL / MariaDB Section */}
               <div className="p-4 bg-slate-800/60 rounded-2xl border border-slate-700/80 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -2251,25 +2238,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                     <div>
                       <h3 className="font-bold text-slate-100 text-sm">
-                        Pangkalan Data Cloud (Firebase Firestore)
+                        Pangkalan Data Cloud (MariaDB / MySQL API)
                       </h3>
                       <p className="text-[11px] text-slate-400">
                         {user ? (
                           <span className="text-emerald-400 font-semibold flex items-center gap-1">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                            Terhubung: {user.email}
+                            Terhubung Staf: {user.name} ({user.loginId})
                           </span>
                         ) : (
                           <span className="text-amber-400 font-semibold flex items-center gap-1">
                             <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-                            Belum Log Masuk (Mod Cache Tempatan)
+                            Belum Log Masuk
                           </span>
                         )}
                       </p>
                     </div>
                   </div>
 
-                  {user ? (
+                  {user && (
                     <button
                       onClick={logout}
                       className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white text-xs font-bold border border-slate-700/70 transition flex items-center gap-1.5 cursor-pointer active:scale-95"
@@ -2277,19 +2264,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <LogOut className="w-3.5 h-3.5" />
                       <span>Log Keluar</span>
                     </button>
-                  ) : (
-                    <button
-                      onClick={loginWithGoogle}
-                      className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black transition flex items-center gap-1.5 cursor-pointer active:scale-95 shadow-sm"
-                    >
-                      <LogIn className="w-3.5 h-3.5" />
-                      <span>Log Masuk Google</span>
-                    </button>
                   )}
                 </div>
 
                 <p className="text-[11.5px] text-slate-300 leading-relaxed bg-slate-900/60 p-2.5 rounded-xl border border-slate-800">
-                  Data produk, pelanggan, tiket dan transaksi jualan disegerakkan secara langsung (real-time) dengan <strong>Google Firebase Firestore</strong>. Sebarang kemas kini harga atau jualan di Sunmi V3 akan serta-merta terpapar di peranti juruwang lain.
+                  Data produk, pelanggan, tiket dan transaksi jualan disegerakkan secara terus melalui API Node.js dengan pangkalan data relational <strong>MariaDB / MySQL</strong>.
                 </p>
 
                 {syncErrorMessage && (
@@ -2416,7 +2395,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <span>Tukar Kata Laluan POS</span>
                   </h3>
                   <p className="text-slate-400 text-[11px] leading-relaxed">
-                    Sila isi ruangan di bawah untuk mengemas kini kata laluan akaun staff anda di sistem Firebase Authentication. Kata laluan lama tidak akan berfungsi selepas penukaran berjaya.
+                    Sila isi ruangan di bawah untuk mengemas kini kata laluan akaun staf anda di pangkalan data MySQL. Kata laluan lama tidak akan berfungsi selepas penukaran berjaya.
                   </p>
 
                   <div className="space-y-3">

@@ -1,12 +1,18 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { CartItem, Customer } from '../types';
-import { Trash2, Plus, ArrowLeft, Save, CreditCard, User, AlertCircle } from 'lucide-react';
+import { Trash2, Plus, ArrowLeft, Save, CreditCard, User, AlertCircle, Truck } from 'lucide-react';
 import { sound } from '../utils/audio';
+import { DeliveryFeeModal } from './DeliveryFeeModal';
 
 interface TicketViewModalProps {
   cartItems: CartItem[];
   customer: Customer;
   currencySymbol: string;
+  deliveryFee?: number;
+  deliveryNotes?: string;
+  isOneOffDelivery?: boolean;
+  showDeliveryFeeOnReceipt?: boolean;
+  onUpdateDeliveryFee: (fee: number, notes: string, isOneOff: boolean, showOnReceipt: boolean) => void;
   onBackToProducts: () => void;
   onClearCart: () => void;
   onRemoveItem: (itemId: string) => void;
@@ -20,6 +26,11 @@ export const TicketViewModal: React.FC<TicketViewModalProps> = ({
   cartItems,
   customer,
   currencySymbol,
+  deliveryFee = 0,
+  deliveryNotes = '',
+  isOneOffDelivery = true,
+  showDeliveryFeeOnReceipt = true,
+  onUpdateDeliveryFee,
   onBackToProducts,
   onClearCart,
   onRemoveItem,
@@ -28,18 +39,24 @@ export const TicketViewModal: React.FC<TicketViewModalProps> = ({
   onProceedToPayment,
   onSelectCustomer,
 }) => {
+  const [isDeliveryModalOpen, setIsDeliveryModalOpen] = useState(false);
+
   const subtotal = useMemo(() => {
-    return cartItems.reduce((sum, item) => sum + item.totalPrice, 0);
+    const raw = cartItems.reduce((sum, item) => sum + item.totalPrice, 0);
+    return Math.round(raw * 100) / 100;
   }, [cartItems]);
 
   const discountAmount = useMemo(() => {
     if (customer.discountPercent && customer.discountPercent > 0) {
-      return (subtotal * customer.discountPercent) / 100;
+      return Math.round(((subtotal * customer.discountPercent) / 100) * 100) / 100;
     }
     return 0;
   }, [subtotal, customer.discountPercent]);
 
-  const totalAmount = Math.max(0, subtotal - discountAmount);
+  const totalAmount = useMemo(() => {
+    const rawTotal = Math.max(0, subtotal - discountAmount + (deliveryFee || 0));
+    return Math.round(rawTotal * 100) / 100;
+  }, [subtotal, discountAmount, deliveryFee]);
 
   const handleClear = () => {
     if (cartItems.length === 0) return;
@@ -242,6 +259,93 @@ export const TicketViewModal: React.FC<TicketViewModalProps> = ({
           </div>
         )}
 
+        {/* Delivery Fee Row (One-off / Preset) */}
+        {deliveryFee > 0 ? (
+          <div className="p-2.5 rounded-xl bg-cyan-950/40 border border-cyan-500/30 flex items-center justify-between text-xs transition-all">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center">
+                <Truck className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="font-bold text-cyan-200">Caj Penghantaran:</span>
+                  {isOneOffDelivery && (
+                    <span className="text-[9px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-1.5 py-0.2 rounded">
+                      One-Off
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      sound.playKeyBeep(600, 0.03);
+                      onUpdateDeliveryFee(deliveryFee, deliveryNotes, isOneOffDelivery, !showDeliveryFeeOnReceipt);
+                    }}
+                    className={`text-[9px] font-bold px-1.5 py-0.5 rounded border transition cursor-pointer ${
+                      showDeliveryFeeOnReceipt
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/30'
+                        : 'bg-slate-800 text-slate-400 border-slate-700 hover:text-slate-200'
+                    }`}
+                    title="Togol sama ada baris caj penghantaran dipaparkan di resit & PDF"
+                  >
+                    Resit: {showDeliveryFeeOnReceipt ? 'ON' : 'OFF'}
+                  </button>
+                </div>
+                {deliveryNotes ? (
+                  <div className="text-[10px] text-cyan-300/80 truncate max-w-[200px]">
+                    {deliveryNotes}
+                  </div>
+                ) : (
+                  <div className="text-[10px] text-slate-400">Pesanan Dihantar</div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-black font-mono text-cyan-300">
+                +{currencySymbol}{deliveryFee.toFixed(2)}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  sound.playKeyBeep(600, 0.03);
+                  setIsDeliveryModalOpen(true);
+                }}
+                className="text-[11px] font-bold text-cyan-400 hover:text-cyan-200 bg-cyan-500/20 hover:bg-cyan-500/30 px-2 py-1 rounded-lg transition cursor-pointer"
+              >
+                Ubah
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  sound.playVoidBeep();
+                  onUpdateDeliveryFee(0, '', true, true);
+                }}
+                className="text-[11px] font-bold text-rose-400 hover:text-rose-200 p-1 rounded-lg hover:bg-rose-500/10 transition cursor-pointer"
+                title="Padam Caj Penghantaran"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              sound.playKeyBeep(600, 0.03);
+              setIsDeliveryModalOpen(true);
+            }}
+            className="w-full py-2 px-3 rounded-xl bg-slate-800/60 hover:bg-slate-800 border border-dashed border-cyan-500/40 text-cyan-300 hover:text-cyan-200 text-xs font-bold transition flex items-center justify-between cursor-pointer active:scale-98"
+          >
+            <div className="flex items-center gap-2">
+              <Truck className="w-4 h-4 text-cyan-400" />
+              <span>+ Tambah Caj Penghantaran</span>
+            </div>
+            <span className="text-[10px] bg-cyan-500/15 border border-cyan-500/30 px-2 py-0.5 rounded text-cyan-300 font-mono">
+              One-Off
+            </span>
+          </button>
+        )}
+
         <div className="flex items-baseline justify-between pt-1 border-t border-slate-800">
           <span className="text-sm font-black uppercase text-slate-200 tracking-wider">
             JUMLAH
@@ -282,6 +386,20 @@ export const TicketViewModal: React.FC<TicketViewModalProps> = ({
           <span>BAYAR {currencySymbol}{totalAmount.toFixed(2)}</span>
         </button>
       </div>
+
+      {/* Delivery Fee Settings Modal */}
+      <DeliveryFeeModal
+        isOpen={isDeliveryModalOpen}
+        currentFee={deliveryFee}
+        currentNotes={deliveryNotes}
+        isOneOff={isOneOffDelivery}
+        showOnReceipt={showDeliveryFeeOnReceipt}
+        currencySymbol={currencySymbol}
+        onClose={() => setIsDeliveryModalOpen(false)}
+        onSaveDeliveryFee={(fee, notes, isOneOff, showOnReceipt) => {
+          onUpdateDeliveryFee(fee, notes, isOneOff, showOnReceipt);
+        }}
+      />
     </div>
   );
 };

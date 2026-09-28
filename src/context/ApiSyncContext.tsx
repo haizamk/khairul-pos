@@ -118,9 +118,10 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
   const isAdmin = isMasterAdmin || currentUserProfile?.role === 'admin';
   const isCashier = currentUserProfile?.role === 'cashier';
 
-  // Helper for API fetch
+  // Helper for API fetch (Uses HttpOnly session cookies automatically)
   const fetchApi = useCallback(async (endpoint: string, options?: RequestInit) => {
     const res = await fetch(endpoint, {
+      credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/json',
         ...(options?.headers || {})

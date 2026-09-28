@@ -19,6 +19,7 @@ const LOCAL_DB_PATH = path.join(DATA_DIR, 'khairul_pos.json');
 
 interface LocalDbSchema {
   users: any[];
+  sessions: any[];
   categories: any[];
   products: any[];
   customers: any[];
@@ -30,6 +31,7 @@ interface LocalDbSchema {
 
 let localDb: LocalDbSchema = {
   users: [],
+  sessions: [],
   categories: [],
   products: [],
   customers: [],
@@ -68,9 +70,17 @@ function saveLocalDb() {
  * Initialize MySQL Database pool & create required tables and seed defaults
  */
 export async function initDatabase() {
-  loadLocalDb();
+  const isProduction = process.env.NODE_ENV === 'production';
 
-  if (MYSQL_HOST) {
+  if (isProduction) {
+    // 1. Mandatory MySQL environment variables check in production
+    if (!MYSQL_HOST || !MYSQL_DATABASE || !MYSQL_USER || MYSQL_PASSWORD === undefined) {
+      console.error('[DB FATAL] MySQL configuration incomplete in production environment.');
+      console.error('[DB FATAL] Required environment variables: MYSQL_HOST, MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD');
+      console.error('[DB FATAL] Production MUST NOT fallback to local JSON database. Terminating process safely.');
+      process.exit(1);
+    }
+
     try {
       mysqlPool = mysql.createPool({
         host: MYSQL_HOST,
@@ -94,11 +104,42 @@ export async function initDatabase() {
       // Create tables
       await createTablesMysql();
     } catch (err: any) {
-      console.warn(`[DB] Could not connect to MySQL at ${MYSQL_HOST}:${MYSQL_PORT} (${err.message}). Using local DB engine.`);
-      isMysqlConnected = false;
+      console.error(`[DB FATAL] Failed to connect to MySQL database at ${MYSQL_HOST}:${MYSQL_PORT} in production: ${err.message}`);
+      console.error('[DB FATAL] Production MUST NOT fallback to local JSON database. Terminating process safely.');
+      process.exit(1);
     }
   } else {
-    console.log('[DB] MYSQL_HOST not defined. Operating with local persistent database engine.');
+    // Development / Preview mode
+    loadLocalDb();
+
+    if (MYSQL_HOST) {
+      try {
+        mysqlPool = mysql.createPool({
+          host: MYSQL_HOST,
+          port: MYSQL_PORT,
+          user: MYSQL_USER,
+          password: MYSQL_PASSWORD,
+          database: MYSQL_DATABASE,
+          waitForConnections: true,
+          connectionLimit: 10,
+          queueLimit: 0,
+          enableKeepAlive: true,
+          keepAliveInitialDelay: 0,
+        });
+
+        const connection = await mysqlPool.getConnection();
+        console.log(`[DB] Connected to MySQL database "${MYSQL_DATABASE}" at ${MYSQL_HOST}:${MYSQL_PORT}`);
+        connection.release();
+        isMysqlConnected = true;
+
+        await createTablesMysql();
+      } catch (err: any) {
+        console.warn(`[DB] Could not connect to MySQL at ${MYSQL_HOST}:${MYSQL_PORT} (${err.message}). Using local DB engine in dev/preview.`);
+        isMysqlConnected = false;
+      }
+    } else {
+      console.log('[DB] MYSQL_HOST not defined in dev/preview. Operating with local persistent database engine.');
+    }
   }
 
   // Seed default data if empty
@@ -217,6 +258,19 @@ async function createTablesMysql() {
       settings_data JSON NOT NULL,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
+
+    `CREATE TABLE IF NOT EXISTS sessions (
+      id VARCHAR(128) PRIMARY KEY,
+      user_id VARCHAR(64) NOT NULL,
+      expires_at DATETIME NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      revoked_at DATETIME NULL DEFAULT NULL,
+      last_seen_at DATETIME NULL DEFAULT NULL,
+      INDEX idx_sessions_user_id (user_id),
+      INDEX idx_sessions_expires_at (expires_at),
+      INDEX idx_sessions_revoked_at (revoked_at),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
   ];
 
   for (const q of queries) {
@@ -226,25 +280,52 @@ async function createTablesMysql() {
 }
 
 async function seedDefaults() {
-  // Check Master Admin user
+  const isProduction = process.env.NODE_ENV === 'production';
   const users = await getUsers();
-  let masterAdmin = users.find((u) => u.role === 'master_admin' || u.login_id === 'khairul');
 
-  if (!masterAdmin) {
-    const passwordHash = await bcrypt.hash('khairul123', 10);
-    const defaultMaster = {
-      id: 'usr_master_khairul',
-      login_id: 'khairul',
-      name: 'Khairul (Master Admin)',
-      phone: '012-345 6789',
-      password_hash: passwordHash,
-      role: 'master_admin',
-      status: 'active',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    await createUser(defaultMaster);
-    console.log('[DB] Default Master Admin created (Login ID: khairul)');
+  if (users.length === 0) {
+    if (isProduction) {
+      const initialLoginId = process.env.INITIAL_MASTER_LOGIN_ID?.trim();
+      const initialPassword = process.env.INITIAL_MASTER_PASSWORD;
+      const initialName = process.env.INITIAL_MASTER_NAME?.trim();
+
+      if (initialLoginId && initialPassword && initialName) {
+        const passwordHash = await bcrypt.hash(initialPassword, 10);
+        const initialMaster = {
+          id: 'usr_master_' + Date.now(),
+          login_id: initialLoginId.toLowerCase(),
+          name: initialName,
+          phone: '',
+          password_hash: passwordHash,
+          role: 'master_admin',
+          status: 'active',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        await createUser(initialMaster);
+        console.log('[DB] Initial Master Admin initialized securely from environment.');
+      } else {
+        console.error('[DB FATAL] No master admin configured. Create the initial administrator securely before starting production.');
+        console.error('[DB FATAL] Set INITIAL_MASTER_LOGIN_ID, INITIAL_MASTER_PASSWORD, and INITIAL_MASTER_NAME in environment to bootstrap the initial master admin.');
+        process.exit(1);
+      }
+    } else {
+      // Non-production / dev / preview only
+      const passwordHash = await bcrypt.hash('khairul123', 10);
+      const defaultMaster = {
+        id: 'usr_master_khairul',
+        login_id: 'khairul',
+        name: 'Khairul (Master Admin)',
+        phone: '012-345 6789',
+        password_hash: passwordHash,
+        role: 'master_admin',
+        status: 'active',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      await createUser(defaultMaster);
+      console.log('[DB] Development Master Admin created (Login ID: khairul)');
+    }
   }
 
   // Check Categories
@@ -448,7 +529,7 @@ export async function createUser(data: any) {
   const passwordHash = data.password_hash || data.passwordHash;
   const role = data.role || 'cashier';
   const status = data.status || 'active';
-  const now = new Date().toISOString();
+  const now = new Date();
 
   if (isMysqlConnected && mysqlPool) {
     await mysqlPool.query(
@@ -467,10 +548,10 @@ export async function createUser(data: any) {
       passwordHash,
       role,
       status,
-      created_at: now,
-      createdAt: now,
-      updated_at: now,
-      updatedAt: now,
+      created_at: now.toISOString(),
+      createdAt: now.toISOString(),
+      updated_at: now.toISOString(),
+      updatedAt: now.toISOString(),
     };
     localDb.users.push(record);
     saveLocalDb();
@@ -488,7 +569,7 @@ export async function updateUser(id: string, updates: any) {
   const role = updates.role !== undefined ? updates.role : existing.role;
   const status = updates.status !== undefined ? updates.status : existing.status;
   const passwordHash = updates.passwordHash || updates.password_hash || existing.passwordHash;
-  const now = new Date().toISOString();
+  const now = new Date();
 
   if (isMysqlConnected && mysqlPool) {
     await mysqlPool.query(
@@ -508,8 +589,8 @@ export async function updateUser(id: string, updates: any) {
           status,
           password_hash: passwordHash,
           passwordHash,
-          updated_at: now,
-          updatedAt: now,
+          updated_at: now.toISOString(),
+          updatedAt: now.toISOString(),
         };
       }
       return u;
@@ -997,3 +1078,107 @@ export async function saveSettings(settingsData: any) {
   }
   return settingsData;
 }
+
+// ==========================================
+// DB API HELPERS: SESSIONS
+// ==========================================
+
+export async function createSession(sessionId: string, userId: string, expiresAt: Date) {
+  const now = new Date();
+  if (isMysqlConnected && mysqlPool) {
+    await mysqlPool.query(
+      `INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)`,
+      [sessionId, userId, expiresAt, now]
+    );
+  } else {
+    if (!localDb.sessions) localDb.sessions = [];
+    localDb.sessions.push({
+      id: sessionId,
+      user_id: userId,
+      userId,
+      expires_at: expiresAt.toISOString(),
+      created_at: now.toISOString(),
+      revoked_at: null,
+      last_seen_at: null,
+    });
+    saveLocalDb();
+  }
+  return { id: sessionId, userId, expiresAt };
+}
+
+export async function getSession(sessionId: string) {
+  const now = new Date();
+  if (isMysqlConnected && mysqlPool) {
+    const [rows]: any = await mysqlPool.query(
+      `SELECT id, user_id, expires_at, created_at, revoked_at, last_seen_at 
+       FROM sessions 
+       WHERE id = ? AND revoked_at IS NULL AND expires_at > NOW()`,
+      [sessionId]
+    );
+    if (rows.length === 0) return null;
+    mysqlPool.query(`UPDATE sessions SET last_seen_at = ? WHERE id = ?`, [now, sessionId]).catch(() => {});
+    const r = rows[0];
+    return {
+      id: r.id,
+      userId: r.user_id,
+      expiresAt: r.expires_at,
+      createdAt: r.created_at,
+      revokedAt: r.revoked_at,
+      lastSeenAt: r.last_seen_at,
+    };
+  } else {
+    if (!localDb.sessions) localDb.sessions = [];
+    const s = localDb.sessions.find(
+      (sess) => sess.id === sessionId && !sess.revoked_at && new Date(sess.expires_at) > now
+    );
+    if (!s) return null;
+    s.last_seen_at = now.toISOString();
+    saveLocalDb();
+    return {
+      id: s.id,
+      userId: s.user_id || s.userId,
+      expiresAt: s.expires_at,
+      createdAt: s.created_at,
+      revokedAt: s.revoked_at,
+      lastSeenAt: s.last_seen_at,
+    };
+  }
+}
+
+export async function revokeSession(sessionId: string) {
+  const now = new Date();
+  if (isMysqlConnected && mysqlPool) {
+    await mysqlPool.query(`UPDATE sessions SET revoked_at = ? WHERE id = ?`, [now, sessionId]);
+  } else {
+    if (!localDb.sessions) localDb.sessions = [];
+    localDb.sessions = localDb.sessions.map((s) => {
+      if (s.id === sessionId) {
+        return { ...s, revoked_at: now.toISOString() };
+      }
+      return s;
+    });
+    saveLocalDb();
+  }
+  return true;
+}
+
+export async function revokeAllUserSessions(userId: string) {
+  const now = new Date();
+  if (isMysqlConnected && mysqlPool) {
+    await mysqlPool.query(
+      `UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`,
+      [now, userId]
+    );
+  } else {
+    if (!localDb.sessions) localDb.sessions = [];
+    localDb.sessions = localDb.sessions.map((s) => {
+      if ((s.user_id === userId || s.userId === userId) && !s.revoked_at) {
+        return { ...s, revoked_at: now.toISOString() };
+      }
+      return s;
+    });
+    saveLocalDb();
+  }
+  return true;
+}
+

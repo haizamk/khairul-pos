@@ -32,20 +32,23 @@ import {
   saveHeldTickets,
   getSettings,
   saveSettings,
+  createSession,
+  getSession,
+  revokeSession,
+  revokeAllUserSessions,
 } from './server/db';
 
 import {
-  signAuthToken,
+  generateSessionId,
   setSessionCookie,
   clearSessionCookie,
+  extractSessionId,
   verifyPassword,
   hashPassword,
   requireAuth,
   requireAdmin,
   requireMasterAdmin,
   AuthenticatedRequest,
-  extractToken,
-  verifyAuthToken,
 } from './server/auth';
 
 dotenv.config();
@@ -92,9 +95,10 @@ async function startServer() {
     return res.status(404).send('Resit PDF tidak dijumpai atau telah tamat tempoh.');
   });
 
-  // API Route: Send WhatsApp Receipt via Fonnte Server-Side Proxy
+  // API Route: Send WhatsApp Receipt via Fonnte Server-Side Proxy (Requires Authentication)
   app.post(
     '/api/whatsapp/receipt',
+    requireAuth,
     (req, res, next) => {
       upload.single('file')(req, res, (err) => {
         if (err) {
@@ -258,8 +262,8 @@ async function startServer() {
     }
   );
 
-  // API Route: Test Fonnte Connection
-  app.post('/api/whatsapp/test-fonnte', async (req, res) => {
+  // API Route: Test Fonnte Connection (Admin only)
+  app.post('/api/whatsapp/test-fonnte', requireAdmin, async (req, res) => {
     try {
       const currentSettings = await getSettings();
       const fonnteToken =
@@ -317,7 +321,7 @@ async function startServer() {
   });
 
   // ==========================================
-  // CUSTOM SERVER-SIDE AUTHENTICATION API
+  // CUSTOM SERVER-SIDE AUTHENTICATION API (OPAQUE SESSIONS)
   // ==========================================
 
   // POST /api/auth/login
@@ -342,14 +346,11 @@ async function startServer() {
         return res.status(401).json({ success: false, error: 'Login ID atau kata laluan tidak sah.' });
       }
 
-      const token = signAuthToken({
-        id: user.id,
-        loginId: user.loginId,
-        name: user.name,
-        role: user.role,
-      });
+      const sessionId = generateSessionId();
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
-      setSessionCookie(res, token);
+      await createSession(sessionId, user.id, expiresAt);
+      setSessionCookie(res, sessionId);
 
       // Sanitize user object (omit passwordHash)
       const { passwordHash, ...cleanUser } = user;
@@ -357,7 +358,6 @@ async function startServer() {
       return res.json({
         success: true,
         user: cleanUser,
-        token,
       });
     } catch (err: any) {
       console.error('Login error:', err);
@@ -366,7 +366,15 @@ async function startServer() {
   });
 
   // POST /api/auth/logout
-  app.post('/api/auth/logout', (req, res) => {
+  app.post('/api/auth/logout', async (req, res) => {
+    try {
+      const sessionId = extractSessionId(req);
+      if (sessionId) {
+        await revokeSession(sessionId);
+      }
+    } catch (err) {
+      console.error('Logout revocation error:', err);
+    }
     clearSessionCookie(res);
     return res.json({ success: true, message: 'Berjaya log keluar.' });
   });
@@ -374,20 +382,23 @@ async function startServer() {
   // GET /api/auth/me
   app.get('/api/auth/me', async (req, res) => {
     try {
-      const token = extractToken(req);
-      if (!token) {
+      const sessionId = extractSessionId(req);
+      if (!sessionId) {
         return res.status(401).json({ success: false, authenticated: false, error: 'Belum log masuk.' });
       }
 
-      const payload = verifyAuthToken(token);
-      if (!payload) {
+      const session = await getSession(sessionId);
+      if (!session) {
         clearSessionCookie(res);
         return res.status(401).json({ success: false, authenticated: false, error: 'Sesi tamat tempoh.' });
       }
 
-      const user = await getUserById(payload.id);
-      if (!user || user.status === 'inactive') {
+      const user = await getUserById(session.userId);
+      if (!user || user.status === 'inactive' || user.status === 'disabled') {
         clearSessionCookie(res);
+        if (session.id) {
+          await revokeSession(session.id);
+        }
         return res.status(403).json({ success: false, authenticated: false, error: 'Akaun tidak aktif.' });
       }
 
@@ -480,6 +491,9 @@ async function startServer() {
       }
 
       const updated = await updateUser(id, updates);
+      if (password || status === 'inactive') {
+        await revokeAllUserSessions(id);
+      }
       const { passwordHash: _, ...clean } = updated!;
       return res.json({ success: true, staff: clean });
     } catch (err: any) {
@@ -501,6 +515,7 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'Akaun Master Admin tidak boleh dipadam!' });
       }
 
+      await revokeAllUserSessions(id);
       await deleteUser(id);
       return res.json({ success: true, message: 'Staf berjaya dipadam.' });
     } catch (err: any) {
@@ -513,7 +528,7 @@ async function startServer() {
   // ==========================================
 
   // Products
-  app.get('/api/products', async (_req, res) => {
+  app.get('/api/products', requireAuth, async (_req, res) => {
     const products = await getProducts();
     res.json({ success: true, products });
   });
@@ -560,7 +575,7 @@ async function startServer() {
   });
 
   // Categories
-  app.get('/api/categories', async (_req, res) => {
+  app.get('/api/categories', requireAuth, async (_req, res) => {
     const categories = await getCategories();
     res.json({ success: true, categories });
   });
@@ -607,12 +622,12 @@ async function startServer() {
   });
 
   // Customers
-  app.get('/api/customers', async (_req, res) => {
+  app.get('/api/customers', requireAuth, async (_req, res) => {
     const customers = await getCustomers();
     res.json({ success: true, customers });
   });
 
-  app.post('/api/customers', async (req, res) => {
+  app.post('/api/customers', requireAuth, async (req, res) => {
     try {
       const saved = await saveCustomer(req.body);
       res.json({ success: true, customer: saved });
@@ -621,7 +636,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/customers/:id', async (req, res) => {
+  app.put('/api/customers/:id', requireAuth, async (req, res) => {
     try {
       const saved = await saveCustomer({ ...req.body, id: req.params.id });
       res.json({ success: true, customer: saved });
@@ -630,7 +645,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/customers/:id', async (req, res) => {
+  app.delete('/api/customers/:id', requireAdmin, async (req, res) => {
     try {
       await deleteCustomer(req.params.id);
       res.json({ success: true });
@@ -640,12 +655,12 @@ async function startServer() {
   });
 
   // Transactions
-  app.get('/api/transactions', async (_req, res) => {
+  app.get('/api/transactions', requireAuth, async (_req, res) => {
     const transactions = await getTransactions();
     res.json({ success: true, transactions });
   });
 
-  app.post('/api/transactions', async (req, res) => {
+  app.post('/api/transactions', requireAuth, async (req, res) => {
     try {
       const saved = await saveTransaction(req.body);
       res.json({ success: true, transaction: saved });
@@ -669,7 +684,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/transactions/:id/whatsapp', async (req, res) => {
+  app.put('/api/transactions/:id/whatsapp', requireAuth, async (req, res) => {
     try {
       const { id } = req.params;
       const { status, sent, phone, error } = req.body;
@@ -681,12 +696,12 @@ async function startServer() {
   });
 
   // Held Tickets
-  app.get('/api/held-tickets', async (_req, res) => {
+  app.get('/api/held-tickets', requireAuth, async (_req, res) => {
     const heldTickets = await getHeldTickets();
     res.json({ success: true, heldTickets });
   });
 
-  app.post('/api/held-tickets', async (req, res) => {
+  app.post('/api/held-tickets', requireAuth, async (req, res) => {
     try {
       const { tickets } = req.body;
       await saveHeldTickets(Array.isArray(tickets) ? tickets : [req.body]);
@@ -697,7 +712,7 @@ async function startServer() {
   });
 
   // Settings
-  app.get('/api/settings', async (_req, res) => {
+  app.get('/api/settings', requireAuth, async (_req, res) => {
     const settings = await getSettings();
     res.json({ success: true, settings });
   });

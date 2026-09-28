@@ -1,9 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
-import { getUserByLoginId, getUserById, updateUser } from './db';
+import { getUserById, getSession, revokeSession } from './db';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'khairul_pos_super_secret_jwt_key_2026';
 const COOKIE_NAME = 'khairul_pos_session';
 
 export interface AuthUserPayload {
@@ -15,48 +14,22 @@ export interface AuthUserPayload {
 
 export interface AuthenticatedRequest extends Request {
   user?: AuthUserPayload;
+  sessionId?: string;
 }
 
 /**
- * Sign JWT token for user session
+ * Generate cryptographically secure opaque session ID
  */
-export function signAuthToken(user: AuthUserPayload): string {
-  return jwt.sign(
-    {
-      id: user.id,
-      loginId: user.loginId,
-      name: user.name,
-      role: user.role,
-    },
-    JWT_SECRET,
-    { expiresIn: '7d' }
-  );
+export function generateSessionId(): string {
+  return crypto.randomBytes(32).toString('hex');
 }
 
 /**
- * Verify JWT token
+ * Extract session ID from HTTP-only cookie
  */
-export function verifyAuthToken(token: string): AuthUserPayload | null {
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET) as AuthUserPayload;
-    return decoded;
-  } catch (err) {
-    return null;
-  }
-}
-
-/**
- * Extract auth token from HTTP-only cookie or Authorization header
- */
-export function extractToken(req: Request): string | null {
-  // Check cookie first
+export function extractSessionId(req: Request): string | null {
   if (req.cookies && req.cookies[COOKIE_NAME]) {
     return req.cookies[COOKIE_NAME];
-  }
-  // Check authorization header
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    return authHeader.split('Bearer ')[1].trim();
   }
   return null;
 }
@@ -64,8 +37,8 @@ export function extractToken(req: Request): string | null {
 /**
  * Set session cookie on response
  */
-export function setSessionCookie(res: Response, token: string) {
-  res.cookie(COOKIE_NAME, token, {
+export function setSessionCookie(res: Response, sessionId: string) {
+  res.cookie(COOKIE_NAME, sessionId, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
@@ -82,26 +55,31 @@ export function clearSessionCookie(res: Response) {
 }
 
 /**
- * Middleware: Enforce authenticated user
+ * Middleware: Enforce authenticated user via server-side session in MySQL
  */
 export async function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
-  const token = extractToken(req);
-  if (!token) {
+  const sessionId = extractSessionId(req);
+  if (!sessionId) {
     return res.status(401).json({ success: false, error: 'Sila log masuk terlebih dahulu.' });
   }
 
-  const payload = verifyAuthToken(token);
-  if (!payload) {
-    return res.status(401).json({ success: false, error: 'Sesi anda telah tamat tempoh. Sila log masuk semula.' });
+  const session = await getSession(sessionId);
+  if (!session) {
+    clearSessionCookie(res);
+    return res.status(401).json({ success: false, error: 'Sesi anda tidak sah atau telah tamat tempoh. Sila log masuk semula.' });
   }
 
-  // Fetch current user status from DB to ensure disabled users cannot perform actions
-  const dbUser = await getUserById(payload.id);
+  // Fetch current user status directly from DB to verify user & live role
+  const dbUser = await getUserById(session.userId);
   if (!dbUser || dbUser.status === 'inactive' || dbUser.status === 'disabled') {
     clearSessionCookie(res);
+    if (session.id) {
+      await revokeSession(session.id);
+    }
     return res.status(403).json({ success: false, error: 'Akaun anda tidak aktif atau telah dinyahaktifkan.' });
   }
 
+  req.sessionId = session.id;
   req.user = {
     id: dbUser.id,
     loginId: dbUser.loginId,

@@ -115,7 +115,7 @@ export const QuantityKeypadModal: React.FC<QuantityKeypadModalProps> = ({
           className="flex items-center gap-2 text-slate-300 hover:text-white transition cursor-pointer"
         >
           <ArrowLeft className="w-5 h-5 text-slate-400" />
-          <span className="font-bold text-sm text-slate-100">{product.name}</span>
+          <span className="font-bold text-[17px] text-slate-100">{product.name}</span>
         </button>
 
         <span className="text-[10px] font-mono font-bold text-slate-400 bg-slate-800 border border-slate-700/60 px-2 py-0.5 rounded-full">

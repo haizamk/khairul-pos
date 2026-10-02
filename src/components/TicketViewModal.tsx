@@ -146,18 +146,18 @@ export const TicketViewModal: React.FC<TicketViewModalProps> = ({
             >
               <div className="flex items-start justify-between">
                 <div>
-                  <div className="text-sm font-extrabold text-slate-100 flex items-center gap-2">
-                    <span className="text-xs font-mono text-slate-500 font-semibold">{idx + 1}.</span>
+                  <div className="text-[17px] font-extrabold text-slate-100 flex items-center gap-2 leading-snug">
+                    <span className="text-[13px] font-mono text-slate-500 font-semibold">{idx + 1}.</span>
                     <span>{item.name}</span>
                   </div>
-                  <div className="text-xs text-slate-400 font-mono mt-0.5 pl-4">
+                  <div className="text-[13px] text-slate-400 font-mono mt-0.5 pl-4 font-medium">
                     {item.quantity.toFixed(2)} {item.unit} × {currencySymbol}
                     {item.unitPrice.toFixed(2)}
                   </div>
                 </div>
 
                 <div className="text-right">
-                  <div className="text-sm font-black font-mono text-emerald-400">
+                  <div className="text-base font-black font-mono text-emerald-400">
                     {currencySymbol}
                     {item.totalPrice.toFixed(2)}
                   </div>

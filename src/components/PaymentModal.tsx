@@ -15,6 +15,7 @@ import {
 import { sound } from '../utils/audio';
 import confetti from 'canvas-confetti';
 import { DeliveryFeeModal } from './DeliveryFeeModal';
+import { DuitNowQrCard } from './DuitNowQrCard';
 
 interface PaymentModalProps {
   cartItems: CartItem[];
@@ -452,74 +453,24 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
         </div>
       )}
 
-      {/* Sub-view: QR PAY (DuitNow) */}
+      {/* Sub-view: QR PAY (DuitNow Official Card) */}
       {activeSubMode === 'qr_pay' && (
-        <div className="flex-1 p-4 flex flex-col items-center justify-center text-center">
-          {/* Simulated Dynamic Malaysian DuitNow QR box */}
-          <div className="p-4 bg-white rounded-2xl shadow-2xl max-w-[240px] border-4 border-amber-600">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-black tracking-widest text-amber-600 uppercase">
-                DuitNow QR
-              </span>
-              <span className="text-[9px] font-bold text-slate-600">
-                {paymentConfig.merchantName || 'KHAIRUL FRESH'}
-              </span>
-            </div>
+        <div className="flex-1 p-3 overflow-y-auto flex flex-col items-center justify-start text-center scrollbar-thin scrollbar-thumb-slate-700">
+          {/* Official Company DuitNow QR Standee Card */}
+          <DuitNowQrCard amount={totalAmount} currencySymbol={currencySymbol} />
 
-            {/* SVG QR Code Pattern */}
-            <div className="w-48 h-48 bg-slate-950 p-2 rounded-xl flex items-center justify-center relative">
-              <svg viewBox="0 0 100 100" className="w-full h-full text-white fill-current">
-                {/* QR Matrix SVG Mock */}
-                <rect x="0" y="0" width="30" height="30" rx="3" fill="#ffffff" />
-                <rect x="5" y="5" width="20" height="20" rx="2" fill="#000000" />
-                <rect x="10" y="10" width="10" height="10" fill="#ffffff" />
-
-                <rect x="70" y="0" width="30" height="30" rx="3" fill="#ffffff" />
-                <rect x="75" y="5" width="20" height="20" rx="2" fill="#000000" />
-                <rect x="80" y="10" width="10" height="10" fill="#ffffff" />
-
-                <rect x="0" y="70" width="30" height="30" rx="3" fill="#ffffff" />
-                <rect x="5" y="75" width="20" height="20" rx="2" fill="#000000" />
-                <rect x="10" y="80" width="10" height="10" fill="#ffffff" />
-
-                {/* Center logo badge */}
-                <circle cx="50" cy="50" r="12" fill="#d97706" />
-                <text x="50" y="54" fontSize="8" fill="#ffffff" textAnchor="middle" fontWeight="bold">
-                  KF
-                </text>
-
-                {/* Random QR bits */}
-                <rect x="35" y="5" width="6" height="6" fill="#ffffff" />
-                <rect x="45" y="15" width="8" height="8" fill="#ffffff" />
-                <rect x="5" y="40" width="10" height="6" fill="#ffffff" />
-                <rect x="20" y="45" width="6" height="8" fill="#ffffff" />
-                <rect x="70" y="40" width="12" height="6" fill="#ffffff" />
-                <rect x="85" y="50" width="6" height="10" fill="#ffffff" />
-                <rect x="35" y="70" width="10" height="8" fill="#ffffff" />
-                <rect x="50" y="75" width="8" height="6" fill="#ffffff" />
-                <rect x="65" y="80" width="10" height="10" fill="#ffffff" />
-              </svg>
-            </div>
-
-            <div className="mt-2 text-center">
-              <span className="text-xs font-mono font-black text-slate-900">
-                {currencySymbol}{totalAmount.toFixed(2)}
-              </span>
-            </div>
-          </div>
-
-          <p className="text-xs text-slate-400 mt-3">
-            Pelanggan boleh imbas menggunakan TNG eWallet, MAE, Bank Islam, GrabPay, dll.
+          <p className="text-xs text-slate-400 mt-3 max-w-xs">
+            Pelanggan boleh imbas menggunakan mana-mana aplikasi eWallet (TNG, MAE, GrabPay) atau Perbankan Dalam Talian.
           </p>
 
           <button
             id="simulate-qr-approved-btn"
             onClick={handleSimulateQrScanned}
             disabled={isQrSimulating}
-            className="mt-4 px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 active:bg-amber-700 text-white text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shadow-lg active:scale-95"
+            className="mt-3 mb-2 px-6 py-3 rounded-xl bg-amber-600 hover:bg-amber-500 active:bg-amber-700 text-white text-xs sm:text-sm font-bold transition-all flex items-center gap-2 cursor-pointer shadow-lg active:scale-95"
           >
             <Zap className="w-4 h-4 text-amber-200" />
-            <span>{isQrSimulating ? 'Memproses Bayaran QR...' : 'Simulasi Pembayaran QR Selesai'}</span>
+            <span>{isQrSimulating ? 'Memproses Bayaran QR...' : 'Sahkan Bayaran QR Diterima'}</span>
           </button>
         </div>
       )}

@@ -167,17 +167,17 @@ export const ProductListView: React.FC<ProductListViewProps> = ({
               className="w-full text-left px-3 py-2.5 hover:bg-slate-800/70 active:bg-slate-750 flex items-center justify-between transition-all group cursor-pointer rounded-xl my-0.5 border border-transparent hover:border-slate-700/60 active:scale-[0.99]"
             >
               <div className="flex items-center gap-3 overflow-hidden">
-                <span className="text-[11px] font-mono font-semibold text-slate-500 w-5 text-center shrink-0">
+                <span className="text-[13px] font-mono font-bold text-slate-500 w-6 text-center shrink-0">
                   {idx + 1}
                 </span>
                 <div>
-                  <div className="text-sm font-bold text-slate-100 group-hover:text-emerald-300 transition-colors flex items-center gap-1.5">
+                  <div className="text-[17px] font-bold text-slate-100 group-hover:text-emerald-300 transition-colors flex items-center gap-1.5 leading-snug">
                     {product.name}
                     {product.isPopular && (
-                      <Sparkles className="w-3 h-3 text-amber-400 shrink-0" />
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                     )}
                   </div>
-                  <div className="text-[11px] text-slate-400 font-mono mt-0.5">
+                  <div className="text-[13px] text-slate-400 font-mono mt-0.5 font-medium">
                     {currencySymbol}
                     {product.defaultPrice.toFixed(2)} / {product.defaultUnit}
                   </div>
@@ -185,7 +185,7 @@ export const ProductListView: React.FC<ProductListViewProps> = ({
               </div>
 
               <div className="flex items-center gap-2 shrink-0">
-                <span className="text-xs font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-0.5 rounded-lg group-hover:bg-emerald-500/20 transition-colors">
+                <span className="text-[13px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1 rounded-lg group-hover:bg-emerald-500/20 transition-colors">
                   Pilih
                 </span>
                 <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-emerald-400 transition-colors" />

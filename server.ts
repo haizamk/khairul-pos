@@ -334,16 +334,16 @@ async function startServer() {
 
       const user = await getUserByLoginId(loginId);
       if (!user) {
-        return res.status(401).json({ success: false, error: 'Login ID atau kata laluan tidak sah.' });
+        return res.status(401).json({ success: false, error: '⚠️ Log masuk gagal. Login ID atau kata laluan tidak sah.' });
       }
 
       if (user.status === 'inactive' || user.status === 'disabled') {
-        return res.status(403).json({ success: false, error: 'Akaun anda telah dinyahaktifkan. Sila hubungi Master Admin.' });
+        return res.status(403).json({ success: false, error: '⚠️ Akaun tidak aktif. Sila hubungi Admin.' });
       }
 
       const isPasswordValid = await verifyPassword(password, user.passwordHash);
       if (!isPasswordValid) {
-        return res.status(401).json({ success: false, error: 'Login ID atau kata laluan tidak sah.' });
+        return res.status(401).json({ success: false, error: '⚠️ Log masuk gagal. Login ID atau kata laluan tidak sah.' });
       }
 
       const sessionId = generateSessionId();

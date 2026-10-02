@@ -328,6 +328,24 @@ async function seedDefaults() {
     }
   }
 
+  // Ensure initial admin user haizamk is present if not exists
+  const existingHaizam = await getUserByLoginId('haizamk');
+  if (!existingHaizam) {
+    const haizamPasswordHash = await bcrypt.hash('haizam123', 10);
+    await createUser({
+      id: 'usr_admin_haizamk',
+      login_id: 'haizamk',
+      name: 'Haizam (Admin)',
+      phone: '012-345 6789',
+      password_hash: haizamPasswordHash,
+      role: 'admin',
+      status: 'active',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    console.log('[DB] Staff account initialized (Login ID: haizamk)');
+  }
+
   // Check Categories
   const categories = await getCategories();
   if (categories.length === 0) {

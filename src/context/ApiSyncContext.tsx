@@ -1,4 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
+import { collection, doc, onSnapshot, setDoc, deleteDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 import {
   Product,
   Category,
@@ -16,6 +18,12 @@ import {
   DEFAULT_SETTINGS,
   Storage as LocalStorageFallback
 } from '../utils/storage';
+
+// Helper to strip undefined values so Firestore setDoc accepts the object without throwing unsupported field errors
+function sanitizeForFirestore<T>(data: T): T {
+  if (data === undefined || data === null) return null as any;
+  return JSON.parse(JSON.stringify(data));
+}
 
 export type SyncState = 'connecting' | 'synced' | 'syncing' | 'offline' | 'unauthenticated' | 'error';
 
@@ -42,7 +50,7 @@ interface ApiSyncContextType {
   settings: AppSettings;
 
   // Mutation Methods
-  saveProduct: (product: Product) => Promise<void>;
+  saveProduct: (product: Product) => Promise<{ success: boolean; error?: string; product?: Product }>;
   deleteProduct: (productId: string) => Promise<void>;
   reorderProducts: (products: Product[]) => Promise<void>;
   saveCategory: (category: Partial<Category> & { name: string }) => Promise<{ success: boolean; error?: string; category?: Category }>;
@@ -118,17 +126,44 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
   const isAdmin = isMasterAdmin || currentUserProfile?.role === 'admin';
   const isCashier = currentUserProfile?.role === 'cashier';
 
-  // Helper for API fetch (Uses HttpOnly session cookies automatically)
+  // Helper for API fetch (Uses HttpOnly session cookies automatically with robust response parsing)
   const fetchApi = useCallback(async (endpoint: string, options?: RequestInit) => {
-    const res = await fetch(endpoint, {
-      credentials: 'same-origin',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(options?.headers || {})
-      },
-      ...options
-    });
-    return res.json();
+    try {
+      const url = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+      const res = await fetch(url, {
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(options?.headers || {})
+        },
+        ...options
+      });
+
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await res.json();
+        if (!res.ok && data && data.success === undefined) {
+          data.success = false;
+        }
+        return data;
+      } else {
+        const text = await res.text();
+        console.warn(`[API] Endpoint ${url} returned non-JSON content (${res.status}):`, text.slice(0, 120));
+        return {
+          success: false,
+          status: res.status,
+          error: res.status === 401 || res.status === 403
+            ? 'Akses ditolak. Sila log masuk semula sebagai Admin.'
+            : `Ralat pelayan (${res.status}).`
+        };
+      }
+    } catch (err: any) {
+      console.error(`[API] Fetch error for ${endpoint}:`, err);
+      return {
+        success: false,
+        error: err?.message || 'Ralat Rangkaian'
+      };
+    }
   }, []);
 
   // Fetch all initial POS data from API
@@ -224,6 +259,74 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
     return () => { mounted = false; };
   }, [fetchApi]);
 
+  // REAL-TIME FIRESTORE MULTI-DEVICE LISTENERS
+  useEffect(() => {
+    // 1. Listen to Products
+    const unsubProducts = onSnapshot(collection(db, 'products'), (snapshot) => {
+      if (!snapshot.empty) {
+        const liveProds = snapshot.docs.map((docSnap) => docSnap.data() as Product);
+        liveProds.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
+        setProducts(liveProds);
+        LocalStorageFallback.saveProducts(liveProds);
+      }
+    }, (err) => console.warn('[Firestore] Products subscription:', err));
+
+    // 2. Listen to Categories
+    const unsubCategories = onSnapshot(collection(db, 'categories'), (snapshot) => {
+      if (!snapshot.empty) {
+        const liveCats = snapshot.docs.map((docSnap) => docSnap.data() as Category);
+        liveCats.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
+        setCategories(liveCats);
+        LocalStorageFallback.saveCategories(liveCats);
+      }
+    }, (err) => console.warn('[Firestore] Categories subscription:', err));
+
+    // 3. Listen to Customers
+    const unsubCustomers = onSnapshot(collection(db, 'customers'), (snapshot) => {
+      if (!snapshot.empty) {
+        const liveCusts = snapshot.docs.map((docSnap) => docSnap.data() as Customer);
+        setCustomers(liveCusts);
+        LocalStorageFallback.saveCustomers(liveCusts);
+      }
+    }, (err) => console.warn('[Firestore] Customers subscription:', err));
+
+    // 4. Listen to Transactions
+    const unsubTransactions = onSnapshot(collection(db, 'transactions'), (snapshot) => {
+      if (!snapshot.empty) {
+        const liveTxs = snapshot.docs.map((docSnap) => docSnap.data() as Transaction);
+        liveTxs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        setTransactions(liveTxs);
+        LocalStorageFallback.saveTransactions(liveTxs);
+      }
+    }, (err) => console.warn('[Firestore] Transactions subscription:', err));
+
+    // 5. Listen to Held Tickets
+    const unsubHeldTickets = onSnapshot(collection(db, 'held_tickets'), (snapshot) => {
+      const liveTickets = snapshot.docs.map((docSnap) => docSnap.data() as HeldTicket);
+      liveTickets.sort((a, b) => a.ticketNumber - b.ticketNumber);
+      setHeldTickets(liveTickets);
+      LocalStorageFallback.saveHeldTickets(liveTickets);
+    }, (err) => console.warn('[Firestore] Held Tickets subscription:', err));
+
+    // 6. Listen to Settings
+    const unsubSettings = onSnapshot(doc(db, 'settings', 'store_config'), (docSnap) => {
+      if (docSnap.exists()) {
+        const liveSet = docSnap.data() as AppSettings;
+        setSettings(liveSet);
+        LocalStorageFallback.saveSettings(liveSet);
+      }
+    }, (err) => console.warn('[Firestore] Settings subscription:', err));
+
+    return () => {
+      unsubProducts();
+      unsubCategories();
+      unsubCustomers();
+      unsubTransactions();
+      unsubHeldTickets();
+      unsubSettings();
+    };
+  }, []);
+
   // Load data when user is authenticated
   useEffect(() => {
     if (currentUserProfile) {
@@ -246,7 +349,6 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
         setCurrentUserProfile(res.user);
         LocalStorageFallback.saveCurrentUserProfile(res.user);
         setSyncState('synced');
-        await refreshAllData();
         return { success: true };
       } else {
         setSyncState('unauthenticated');
@@ -260,7 +362,7 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
       setSyncErrorMessage(msg);
       return { success: false, error: msg };
     }
-  }, [fetchApi, refreshAllData]);
+  }, [fetchApi]);
 
   // Logout method
   const logout = useCallback(async () => {
@@ -280,7 +382,7 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Save Product
-  const saveProduct = useCallback(async (product: Product) => {
+  const saveProduct = useCallback(async (product: Product): Promise<{ success: boolean; error?: string; product?: Product }> => {
     const prodId = product.id || `p_${Date.now()}`;
     const cleanProd = { ...product, id: prodId };
 
@@ -291,13 +393,24 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
       return next;
     });
 
+    // Write to Firestore for instant real-time multi-device sync
+    setDoc(doc(db, 'products', prodId), sanitizeForFirestore(cleanProd), { merge: true }).catch((err) =>
+      console.warn('[Firestore] saveProduct setDoc warning:', err)
+    );
+
     try {
-      await fetchApi(product.id ? `/api/products/${product.id}` : '/api/products', {
+      const endpoint = product.id ? `/api/products/${encodeURIComponent(product.id)}` : '/api/products';
+      const res = await fetchApi(endpoint, {
         method: product.id ? 'PUT' : 'POST',
         body: JSON.stringify(cleanProd)
       });
-    } catch (err) {
+      if (res && res.success) {
+        return { success: true, product: res.product || cleanProd };
+      }
+      return { success: false, error: res?.error || 'Gagal menyimpan produk ke pangkalan data.' };
+    } catch (err: any) {
       console.error('saveProduct API error:', err);
+      return { success: false, error: err?.message || 'Ralat semasa menyimpan produk.' };
     }
   }, [fetchApi]);
 
@@ -309,8 +422,12 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
       return next;
     });
 
+    deleteDoc(doc(db, 'products', productId)).catch((err) =>
+      console.warn('[Firestore] deleteProduct deleteDoc warning:', err)
+    );
+
     try {
-      await fetchApi(`/api/products/${productId}`, { method: 'DELETE' });
+      await fetchApi(`/api/products/${encodeURIComponent(productId)}`, { method: 'DELETE' });
     } catch (err) {
       console.error('deleteProduct API error:', err);
     }
@@ -345,6 +462,10 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
       LocalStorageFallback.saveCategories(next);
       return next;
     });
+
+    setDoc(doc(db, 'categories', catId), sanitizeForFirestore(cleanCat), { merge: true }).catch((err) =>
+      console.warn('[Firestore] saveCategory setDoc warning:', err)
+    );
 
     try {
       const res = await fetchApi(cat.id ? `/api/categories/${cat.id}` : '/api/categories', {
@@ -384,6 +505,10 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
       LocalStorageFallback.saveCategories(next);
       return next;
     });
+
+    deleteDoc(doc(db, 'categories', categoryId)).catch((err) =>
+      console.warn('[Firestore] deleteCategory deleteDoc warning:', err)
+    );
 
     try {
       await fetchApi(`/api/categories/${categoryId}`, { method: 'DELETE' });
@@ -440,6 +565,10 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
       return next;
     });
 
+    setDoc(doc(db, 'customers', custId), sanitizeForFirestore(cleanCust), { merge: true }).catch((err) =>
+      console.warn('[Firestore] saveCustomer setDoc warning:', err)
+    );
+
     try {
       await fetchApi(cust.id ? `/api/customers/${cust.id}` : '/api/customers', {
         method: cust.id ? 'PUT' : 'POST',
@@ -462,6 +591,10 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
       return next;
     });
 
+    deleteDoc(doc(db, 'customers', customerId)).catch((err) =>
+      console.warn('[Firestore] deleteCustomer deleteDoc warning:', err)
+    );
+
     try {
       await fetchApi(`/api/customers/${customerId}`, { method: 'DELETE' });
     } catch {
@@ -478,6 +611,10 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
       return next;
     });
 
+    setDoc(doc(db, 'transactions', tx.id), sanitizeForFirestore(tx), { merge: true }).catch((err) =>
+      console.warn('[Firestore] saveTransaction setDoc warning:', err)
+    );
+
     try {
       await fetchApi('/api/transactions', {
         method: 'POST',
@@ -490,21 +627,30 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
 
   // Void Transaction
   const voidTransaction = useCallback(async (txId: string, reason: string) => {
+    let voidedTx: Transaction | null = null;
+
     setTransactions((prev) => {
       const next = prev.map((t) => {
         if (t.id === txId) {
-          return {
+          voidedTx = {
             ...t,
             status: 'voided' as const,
             voidReason: reason,
             voidedAt: new Date().toISOString()
           };
+          return voidedTx;
         }
         return t;
       });
       LocalStorageFallback.saveTransactions(next);
       return next;
     });
+
+    if (voidedTx) {
+      setDoc(doc(db, 'transactions', txId), sanitizeForFirestore(voidedTx), { merge: true }).catch((err) =>
+        console.warn('[Firestore] voidTransaction setDoc warning:', err)
+      );
+    }
 
     try {
       await fetchApi(`/api/transactions/${txId}/void`, {
@@ -523,10 +669,12 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
     phone?: string,
     error?: string
   ) => {
+    let updatedTx: Transaction | null = null;
+
     setTransactions((prev) => {
       const next = prev.map((t) => {
         if (t.id === txId) {
-          return {
+          updatedTx = {
             ...t,
             whatsappStatus: status,
             whatsappSent: status === 'sent',
@@ -534,12 +682,19 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
             whatsappError: error,
             whatsappSentAt: status === 'sent' ? new Date().toISOString() : t.whatsappSentAt
           };
+          return updatedTx;
         }
         return t;
       });
       LocalStorageFallback.saveTransactions(next);
       return next;
     });
+
+    if (updatedTx) {
+      setDoc(doc(db, 'transactions', txId), sanitizeForFirestore(updatedTx), { merge: true }).catch((err) =>
+        console.warn('[Firestore] updateTransactionWhatsAppStatus setDoc warning:', err)
+      );
+    }
 
     try {
       await fetchApi(`/api/transactions/${txId}/whatsapp`, {
@@ -556,6 +711,13 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
     setHeldTickets(tickets);
     LocalStorageFallback.saveHeldTickets(tickets);
 
+    // Sync each held ticket to Firestore
+    tickets.forEach((t) => {
+      setDoc(doc(db, 'held_tickets', t.id), sanitizeForFirestore(t), { merge: true }).catch((err) =>
+        console.warn('[Firestore] saveHeldTickets setDoc warning:', err)
+      );
+    });
+
     try {
       await fetchApi('/api/held-tickets', {
         method: 'POST',
@@ -571,14 +733,24 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
     setSettings(newSettings);
     LocalStorageFallback.saveSettings(newSettings);
 
+    setDoc(doc(db, 'settings', 'store_config'), sanitizeForFirestore(newSettings), { merge: true }).catch((err) =>
+      console.warn('[Firestore] saveSettings setDoc warning:', err)
+    );
+
     try {
       const res = await fetchApi('/api/settings', {
         method: 'PUT',
         body: JSON.stringify(newSettings)
       });
-      return { success: res.success };
+      if (res && res.success) {
+        return { success: true };
+      }
+      return { 
+        success: false, 
+        error: res?.error || res?.message || 'Sila pastikan anda telah log masuk sebagai Admin untuk menyimpan tetapan.' 
+      };
     } catch (err: any) {
-      return { success: false, error: err.message };
+      return { success: false, error: err?.message || 'Ralat sambungan ke pangkalan data.' };
     }
   }, [fetchApi]);
 

@@ -184,7 +184,7 @@ export const PosHeader: React.FC<PosHeaderProps> = ({
         <div className="w-[1px] h-5 bg-slate-800/80 mx-1 hidden xs:block" />
 
         {/* Active Staff User Badge & Red Log Out Button */}
-        {user && currentUserProfile ? (
+        {currentUserProfile ? (
           <div className="flex items-center gap-1.5 pl-0.5 shrink-0">
             <div 
               className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl border text-[10.5px] font-extrabold shadow-sm ${

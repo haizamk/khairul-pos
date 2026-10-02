@@ -1,0 +1,170 @@
+{
+  "entities": {
+    "users": {
+      "title": "Users",
+      "description": "Staff and admin profiles",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "loginId": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "role": { "type": "string", "enum": ["master_admin", "admin", "cashier"] },
+        "status": { "type": "string", "enum": ["active", "inactive", "disabled"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "loginId", "name", "role", "status"]
+    },
+    "products": {
+      "title": "Products",
+      "description": "Product catalog items",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "defaultPrice": { "type": "number" },
+        "defaultUnit": { "type": "string" },
+        "isPopular": { "type": "boolean" },
+        "sortOrder": { "type": "number" }
+      },
+      "required": ["id", "name", "defaultPrice", "defaultUnit"]
+    },
+    "categories": {
+      "title": "Categories",
+      "description": "Product category list",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "sortOrder": { "type": "number" }
+      },
+      "required": ["id", "name"]
+    },
+    "customers": {
+      "title": "Customers",
+      "description": "Customer list",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "type": { "type": "string" },
+        "notes": { "type": "string" },
+        "discountPercent": { "type": "number" }
+      },
+      "required": ["id", "name", "type"]
+    },
+    "transactions": {
+      "title": "Transactions",
+      "description": "Sales transactions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "invoiceNo": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "subtotal": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "paymentMethod": { "type": "string" },
+        "cashierName": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "invoiceNo", "timestamp", "totalAmount", "status"]
+    },
+    "held_tickets": {
+      "title": "Held Tickets",
+      "description": "Parked order tickets",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ticketNumber": { "type": "number" },
+        "name": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "ticketNumber"]
+    },
+    "settings": {
+      "title": "Settings",
+      "description": "Store configuration",
+      "type": "object",
+      "properties": {
+        "storeName": { "type": "string" },
+        "adminPin": { "type": "string" }
+      },
+      "required": ["storeName"]
+    }
+  },
+  "firestore": {
+    "users": {
+      "path": "users/{userId}",
+      "definition": {
+        "entity": "users",
+        "access": {
+          "read": "authenticated",
+          "write": "authenticated"
+        }
+      }
+    },
+    "products": {
+      "path": "products/{productId}",
+      "definition": {
+        "entity": "products",
+        "access": {
+          "read": "public",
+          "write": "authenticated"
+        }
+      }
+    },
+    "categories": {
+      "path": "categories/{categoryId}",
+      "definition": {
+        "entity": "categories",
+        "access": {
+          "read": "public",
+          "write": "authenticated"
+        }
+      }
+    },
+    "customers": {
+      "path": "customers/{customerId}",
+      "definition": {
+        "entity": "customers",
+        "access": {
+          "read": "public",
+          "write": "authenticated"
+        }
+      }
+    },
+    "transactions": {
+      "path": "transactions/{transactionId}",
+      "definition": {
+        "entity": "transactions",
+        "access": {
+          "read": "public",
+          "write": "public"
+        }
+      }
+    },
+    "held_tickets": {
+      "path": "held_tickets/{ticketId}",
+      "definition": {
+        "entity": "held_tickets",
+        "access": {
+          "read": "public",
+          "write": "public"
+        }
+      }
+    },
+    "settings": {
+      "path": "settings/{settingId}",
+      "definition": {
+        "entity": "settings",
+        "access": {
+          "read": "public",
+          "write": "authenticated"
+        }
+      }
+    }
+  }
+}

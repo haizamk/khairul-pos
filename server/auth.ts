@@ -40,8 +40,8 @@ export function extractSessionId(req: Request): string | null {
 export function setSessionCookie(res: Response, sessionId: string) {
   res.cookie(COOKIE_NAME, sessionId, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    secure: true,
+    sameSite: 'none',
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     path: '/',
   });
@@ -51,7 +51,7 @@ export function setSessionCookie(res: Response, sessionId: string) {
  * Clear session cookie on logout
  */
 export function clearSessionCookie(res: Response) {
-  res.clearCookie(COOKIE_NAME, { path: '/' });
+  res.clearCookie(COOKIE_NAME, { path: '/', sameSite: 'none', secure: true });
 }
 
 /**

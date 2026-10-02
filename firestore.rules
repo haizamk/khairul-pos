@@ -1,8 +1,86 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isMasterAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == "vpsrush@gmail.com" ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == "master_admin")
+      );
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        isMasterAdmin() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == "admin")
+      );
+    }
+
+    function isCashier() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == "cashier";
+    }
+
+    // Global default deny
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
+    }
+
+    // 1. USERS COLLECTION
+    match /users/{userId} {
+      // Cashiers can only read their own user document; Admins can read all staff
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
+      allow create: if isAdmin() && (
+        request.resource.data.role != "master_admin" || isMasterAdmin()
+      );
+      allow update: if isAdmin() && (
+        request.resource.data.role != "master_admin" || isMasterAdmin()
+      );
+      allow delete: if isMasterAdmin();
+    }
+
+    // 2. PRODUCTS COLLECTION
+    match /products/{productId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // 3. CATEGORIES COLLECTION
+    match /categories/{categoryId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // 4. CUSTOMERS COLLECTION
+    match /customers/{customerId} {
+      allow read, create, update: if isSignedIn();
+      allow delete: if isAdmin();
+    }
+
+    // 5. TRANSACTIONS COLLECTION
+    match /transactions/{transactionId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isAdmin();
+      allow delete: if isMasterAdmin();
+    }
+
+    // 6. HELD TICKETS COLLECTION
+    match /held_tickets/{ticketId} {
+      allow read, create, update, delete: if isSignedIn();
+    }
+
+    // 7. SETTINGS COLLECTION (Contains adminPin - restricted to Admin & Master Admin)
+    match /settings/{settingId} {
+      allow read, create, update, delete: if isAdmin();
     }
   }
 }

@@ -46,6 +46,7 @@ lerna-debug.log*
 /laravel/public/hot
 
 # General caches & Firestore Cache
+.data/
 firestore_cache/
 *.blade.php.cache
 *.php.cache

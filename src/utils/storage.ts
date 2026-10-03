@@ -279,9 +279,9 @@ export const Storage = {
   getTransactions(): Transaction[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
-      return data ? JSON.parse(data) : SEED_TRANSACTIONS;
+      return data ? JSON.parse(data) : [];
     } catch {
-      return SEED_TRANSACTIONS;
+      return [];
     }
   },
   saveTransactions(txs: Transaction[]) {

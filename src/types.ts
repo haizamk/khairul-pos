@@ -5,13 +5,13 @@ export type UserStatus = 'active' | 'inactive';
 
 export interface AppUser {
   uid: string;
+  id?: string;
   name: string;
   phone: string;
   loginId: string;
   email?: string;
   role: UserRole;
   status: UserStatus;
-  passwordHash?: string;
   createdAt: string;
   updatedAt?: string;
 }

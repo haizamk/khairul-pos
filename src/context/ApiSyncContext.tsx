@@ -1,6 +1,17 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
-import { collection, doc, onSnapshot, setDoc, deleteDoc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { collection, doc, getDoc, getDocs, onSnapshot, setDoc, deleteDoc, query, where } from 'firebase/firestore';
+import {
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup
+} from 'firebase/auth';
+import { initializeApp, getApps } from 'firebase/app';
+import { db, auth } from '../firebase';
+import firebaseConfig from '../../firebase-applet-config.json';
 import {
   Product,
   Category,
@@ -12,12 +23,14 @@ import {
   UserStatus
 } from '../types';
 import {
-  DEFAULT_PRODUCTS,
-  DEFAULT_CATEGORY_ITEMS,
-  DEFAULT_CUSTOMERS,
-  DEFAULT_SETTINGS,
   Storage as LocalStorageFallback
 } from '../utils/storage';
+
+// Helper to convert POS loginId to internal deterministic Firebase Auth email
+function getFirebaseEmailFromLoginId(loginId: string): string {
+  const clean = loginId.trim().toLowerCase();
+  return `${clean}@pos.freshmarket.my`;
+}
 
 // Helper to strip undefined values so Firestore setDoc accepts the object without throwing unsupported field errors
 function sanitizeForFirestore<T>(data: T): T {
@@ -100,9 +113,7 @@ interface ApiSyncContextType {
 const ApiSyncContext = createContext<ApiSyncContextType | undefined>(undefined);
 
 export function ApiSyncProvider({ children }: { children: ReactNode }) {
-  const [currentUserProfile, setCurrentUserProfile] = useState<AppUser | null>(() => {
-    return LocalStorageFallback.getCurrentUserProfile();
-  });
+  const [currentUserProfile, setCurrentUserProfile] = useState<AppUser | null>(null);
   const [staffUsers, setStaffUsers] = useState<AppUser[]>(() => {
     return LocalStorageFallback.getStaffUsers();
   });
@@ -126,141 +137,109 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
   const isAdmin = isMasterAdmin || currentUserProfile?.role === 'admin';
   const isCashier = currentUserProfile?.role === 'cashier';
 
-  // Helper for API fetch (Uses HttpOnly session cookies automatically with robust response parsing)
-  const fetchApi = useCallback(async (endpoint: string, options?: RequestInit) => {
+  // Seed default master/admin user profile documents if Firestore users collection is empty (NO passwordHash)
+  const seedDbDefaults = useCallback(async () => {
     try {
-      const url = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-      const res = await fetch(url, {
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(options?.headers || {})
-        },
-        ...options
-      });
-
-      const contentType = res.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const data = await res.json();
-        if (!res.ok && data && data.success === undefined) {
-          data.success = false;
-        }
-        return data;
-      } else {
-        const text = await res.text();
-        console.warn(`[API] Endpoint ${url} returned non-JSON content (${res.status}):`, text.slice(0, 120));
-        return {
-          success: false,
-          status: res.status,
-          error: res.status === 401 || res.status === 403
-            ? 'Akses ditolak. Sila log masuk semula sebagai Admin.'
-            : `Ralat pelayan (${res.status}).`
+      const usersSnap = await getDocs(collection(db, 'users'));
+      if (usersSnap.empty) {
+        const defaultMaster: AppUser = {
+          id: 'usr_master_khairul',
+          uid: 'usr_master_khairul',
+          loginId: 'khairul',
+          name: 'Khairul (Master Admin)',
+          phone: '012-345 6789',
+          role: 'master_admin',
+          status: 'active',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
         };
+        await setDoc(doc(db, 'users', 'usr_master_khairul'), sanitizeForFirestore(defaultMaster));
+
+        const haizamUser: AppUser = {
+          id: 'usr_admin_haizamk',
+          uid: 'usr_admin_haizamk',
+          loginId: 'haizamk',
+          name: 'Haizam (Admin)',
+          phone: '012-345 6789',
+          role: 'admin',
+          status: 'active',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        await setDoc(doc(db, 'users', 'usr_admin_haizamk'), sanitizeForFirestore(haizamUser));
       }
-    } catch (err: any) {
-      console.error(`[API] Fetch error for ${endpoint}:`, err);
-      return {
-        success: false,
-        error: err?.message || 'Ralat Rangkaian'
-      };
+    } catch (err) {
+      console.warn('[Firestore] seedDbDefaults warning:', err);
     }
   }, []);
 
-  // Fetch all initial POS data from API
-  const refreshAllData = useCallback(async () => {
-    try {
-      setSyncState('syncing');
-
-      // Fetch Products
-      const prodRes = await fetchApi('/api/products');
-      if (prodRes.success && Array.isArray(prodRes.products)) {
-        setProducts(prodRes.products);
-        LocalStorageFallback.saveProducts(prodRes.products);
-      }
-
-      // Fetch Categories
-      const catRes = await fetchApi('/api/categories');
-      if (catRes.success && Array.isArray(catRes.categories)) {
-        setCategories(catRes.categories);
-        LocalStorageFallback.saveCategories(catRes.categories);
-      }
-
-      // Fetch Customers
-      const custRes = await fetchApi('/api/customers');
-      if (custRes.success && Array.isArray(custRes.customers)) {
-        setCustomers(custRes.customers);
-        LocalStorageFallback.saveCustomers(custRes.customers);
-      }
-
-      // Fetch Transactions
-      const txRes = await fetchApi('/api/transactions');
-      if (txRes.success && Array.isArray(txRes.transactions)) {
-        setTransactions(txRes.transactions);
-        LocalStorageFallback.saveTransactions(txRes.transactions);
-      }
-
-      // Fetch Held Tickets
-      const htRes = await fetchApi('/api/held-tickets');
-      if (htRes.success && Array.isArray(htRes.heldTickets)) {
-        setHeldTickets(htRes.heldTickets);
-        LocalStorageFallback.saveHeldTickets(htRes.heldTickets);
-      }
-
-      // Fetch Settings
-      const setRes = await fetchApi('/api/settings');
-      if (setRes.success && setRes.settings) {
-        setSettings(setRes.settings);
-        LocalStorageFallback.saveSettings(setRes.settings);
-      }
-
-      // Fetch Staff if admin
-      if (currentUserProfile?.role === 'master_admin' || currentUserProfile?.role === 'admin') {
-        const staffRes = await fetchApi('/api/staff');
-        if (staffRes.success && Array.isArray(staffRes.staff)) {
-          setStaffUsers(staffRes.staff);
-          LocalStorageFallback.saveStaffUsers(staffRes.staff);
-        }
-      }
-
-      setSyncState('synced');
-      setLastSyncedAt(new Date());
-    } catch (err) {
-      console.error('[API Sync] Fetch error:', err);
-      setSyncState('synced'); // Fallback to cached local data without crashing
-    }
-  }, [fetchApi, currentUserProfile]);
-
-  // Check auth session on load
+  // REAL FIREBASE AUTH STATE LISTENER (Single source of truth for authentication)
   useEffect(() => {
-    let mounted = true;
-    async function checkAuthSession() {
-      try {
-        const res = await fetchApi('/api/auth/me');
-        if (mounted) {
-          if (res.success && res.authenticated && res.user) {
-            setCurrentUserProfile(res.user);
-            LocalStorageFallback.saveCurrentUserProfile(res.user);
-            setSyncState('synced');
-          } else {
-            setCurrentUserProfile(null);
-            LocalStorageFallback.saveCurrentUserProfile(null);
-            setSyncState('unauthenticated');
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        try {
+          const userDocRef = doc(db, 'users', firebaseUser.uid);
+          let docSnap = await getDoc(userDocRef);
+
+          if (!docSnap.exists()) {
+            const cleanLoginId = firebaseUser.email?.split('@')[0] || '';
+            const newProfile: AppUser = {
+              uid: firebaseUser.uid,
+              id: firebaseUser.uid,
+              loginId: cleanLoginId || 'staff',
+              name: firebaseUser.displayName || (cleanLoginId === 'khairul' ? 'Khairul (Master Admin)' : cleanLoginId === 'haizamk' ? 'Haizam (Admin)' : 'Staf POS'),
+              phone: '012-345 6789',
+              role: cleanLoginId === 'khairul' ? 'master_admin' : cleanLoginId === 'haizamk' ? 'admin' : 'cashier',
+              status: 'active',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+            await setDoc(userDocRef, sanitizeForFirestore(newProfile));
+            docSnap = await getDoc(userDocRef);
           }
-          setIsAuthReady(true);
-        }
-      } catch (err) {
-        if (mounted) {
-          setIsAuthReady(true);
-          setSyncState('unauthenticated');
-        }
-      }
-    }
-    checkAuthSession();
-    return () => { mounted = false; };
-  }, [fetchApi]);
 
-  // REAL-TIME FIRESTORE MULTI-DEVICE LISTENERS
+          if (docSnap.exists()) {
+            const fresh = docSnap.data() as AppUser;
+            if (fresh.status === 'active') {
+              const cleanUser: AppUser = {
+                ...fresh,
+                uid: firebaseUser.uid,
+                id: firebaseUser.uid,
+                loginId: fresh.loginId || (fresh as any).login_id || '',
+              };
+              setCurrentUserProfile(cleanUser);
+              setSyncState('synced');
+              setIsAuthReady(true);
+              return;
+            } else {
+              console.warn('[Firebase Auth] User account is inactive in Firestore.');
+              await signOut(auth);
+              setCurrentUserProfile(null);
+              setSyncState('unauthenticated');
+              setIsAuthReady(true);
+              return;
+            }
+          }
+        } catch (err) {
+          console.error('[Firebase Auth] Profile sync error:', err);
+          setCurrentUserProfile(null);
+          setSyncState('unauthenticated');
+          setIsAuthReady(true);
+        }
+      } else {
+        setCurrentUserProfile(null);
+        setSyncState('unauthenticated');
+        setIsAuthReady(true);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // REAL-TIME FIRESTORE MULTI-DEVICE LISTENERS (Active only when user is authenticated)
   useEffect(() => {
+    if (!currentUserProfile) return;
+
     // 1. Listen to Products
     const unsubProducts = onSnapshot(collection(db, 'products'), (snapshot) => {
       if (!snapshot.empty) {
@@ -317,6 +296,23 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
       }
     }, (err) => console.warn('[Firestore] Settings subscription:', err));
 
+    // 7. Listen to Staff Users
+    const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
+      if (!snapshot.empty) {
+        const liveUsers = snapshot.docs.map((docSnap) => {
+          const data = docSnap.data() as any;
+          return {
+            ...data,
+            uid: docSnap.id || data.uid || data.id,
+            id: docSnap.id || data.id || data.uid,
+            loginId: data.loginId || data.login_id,
+          } as AppUser;
+        });
+        setStaffUsers(liveUsers);
+        LocalStorageFallback.saveStaffUsers(liveUsers);
+      }
+    }, (err) => console.warn('[Firestore] Users subscription:', err));
+
     return () => {
       unsubProducts();
       unsubCategories();
@@ -324,61 +320,139 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
       unsubTransactions();
       unsubHeldTickets();
       unsubSettings();
+      unsubUsers();
     };
-  }, []);
+  }, [currentUserProfile]);
 
-  // Load data when user is authenticated
-  useEffect(() => {
-    if (currentUserProfile) {
-      refreshAllData();
-    }
-  }, [currentUserProfile?.uid, refreshAllData]);
-
-  // Login method
+  // Login method via real Firebase Authentication
   const loginWithLoginId = useCallback(async (loginId: string, pass: string): Promise<{ success: boolean; error?: string }> => {
     try {
       setSyncState('syncing');
       setSyncErrorMessage(null);
 
-      const res = await fetchApi('/api/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({ loginId, password: pass })
-      });
-
-      if (res.success && res.user) {
-        setCurrentUserProfile(res.user);
-        LocalStorageFallback.saveCurrentUserProfile(res.user);
-        setSyncState('synced');
-        return { success: true };
-      } else {
+      const cleanLoginId = loginId.trim().toLowerCase();
+      if (!cleanLoginId || !pass) {
         setSyncState('unauthenticated');
-        const err = res.error || '⚠️ Log masuk gagal — Sila semak Login ID dan kata laluan.';
-        setSyncErrorMessage(err);
-        return { success: false, error: err };
+        return { success: false, error: 'Sila masukkan Login ID dan kata laluan.' };
+      }
+
+      const email = getFirebaseEmailFromLoginId(cleanLoginId);
+
+      try {
+        // 1. Authenticate with Firebase Authentication SDK
+        const userCred = await signInWithEmailAndPassword(auth, email, pass);
+        const firebaseUid = userCred.user.uid;
+
+        // 2. Read users/{firebaseUid} profile document
+        const userDocRef = doc(db, 'users', firebaseUid);
+        let userDocSnap = await getDoc(userDocRef);
+
+        if (!userDocSnap.exists()) {
+          // Migration check: If old document existed by loginId, migrate to users/{firebaseUid}
+          const q = query(collection(db, 'users'), where('loginId', '==', cleanLoginId));
+          const qSnap = await getDocs(q);
+          if (!qSnap.empty) {
+            const oldData = qSnap.docs[0].data() as any;
+            const migratedProfile: AppUser = {
+              uid: firebaseUid,
+              id: firebaseUid,
+              loginId: cleanLoginId,
+              name: oldData.name || cleanLoginId,
+              phone: oldData.phone || '',
+              role: oldData.role || 'cashier',
+              status: oldData.status || 'active',
+              createdAt: oldData.createdAt || new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+            await setDoc(userDocRef, sanitizeForFirestore(migratedProfile));
+            userDocSnap = await getDoc(userDocRef);
+          }
+        }
+
+        if (userDocSnap.exists()) {
+          const profile = userDocSnap.data() as AppUser;
+          if (profile.status === 'inactive') {
+            await signOut(auth);
+            setSyncState('unauthenticated');
+            const err = '⚠️ Akaun tidak aktif. Sila hubungi Admin.';
+            setSyncErrorMessage(err);
+            return { success: false, error: err };
+          }
+
+          const cleanUser: AppUser = {
+            ...profile,
+            uid: firebaseUid,
+            id: firebaseUid,
+          };
+          setCurrentUserProfile(cleanUser);
+          setSyncState('synced');
+          setIsAuthReady(true);
+          return { success: true };
+        } else {
+          await signOut(auth);
+          setSyncState('unauthenticated');
+          const err = '⚠️ Profil staf tidak dijumpai di Firestore.';
+          setSyncErrorMessage(err);
+          return { success: false, error: err };
+        }
+      } catch (authErr: any) {
+        console.warn('[Firebase Auth] signIn error code:', authErr?.code, authErr?.message);
+
+        setSyncState('unauthenticated');
+        let msg = '⚠️ ID pengguna atau kata laluan tidak sah.';
+        if (authErr?.code === 'auth/too-many-requests') {
+          msg = '⚠️ Terlalu banyak percubaan gagal. Sila cuba sebentar lagi.';
+        }
+        setSyncErrorMessage(msg);
+        return { success: false, error: msg };
       }
     } catch (err: any) {
+      console.error('Login error:', err);
       setSyncState('unauthenticated');
-      const msg = err.message || '⚠️ Gagal berhubung dengan pelayan.';
+      const msg = err.message || '⚠️ Gagal log masuk.';
       setSyncErrorMessage(msg);
       return { success: false, error: msg };
     }
-  }, [fetchApi]);
+  }, []);
 
-  // Logout method
+  // Logout method via Firebase Auth signOut
   const logout = useCallback(async () => {
     try {
-      await fetchApi('/api/auth/logout', { method: 'POST' });
-    } catch {
-      // Ignore
+      await signOut(auth);
+    } catch (err) {
+      console.warn('[Firebase Auth] signOut error:', err);
     }
     setCurrentUserProfile(null);
-    LocalStorageFallback.saveCurrentUserProfile(null);
     setSyncState('unauthenticated');
-  }, [fetchApi]);
+  }, []);
 
-  // Placeholder Google Login
+  // Google Login for Master Admin / Store Owner
   const loginWithGoogle = useCallback(async () => {
-    alert('Log masuk Google tidak disokong. Sila gunakan Login ID dan Kata Laluan staf.');
+    try {
+      const provider = new GoogleAuthProvider();
+      const res = await signInWithPopup(auth, provider);
+      const user = res.user;
+      const userDocRef = doc(db, 'users', user.uid);
+      const docSnap = await getDoc(userDocRef);
+      if (!docSnap.exists()) {
+        const isMaster = user.email === 'vpsrush@gmail.com';
+        const newProfile: AppUser = {
+          uid: user.uid,
+          id: user.uid,
+          loginId: user.email?.split('@')[0] || 'google_user',
+          name: user.displayName || 'Google User',
+          phone: user.phoneNumber || '',
+          role: isMaster ? 'master_admin' : 'admin',
+          status: 'active',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        await setDoc(userDocRef, sanitizeForFirestore(newProfile));
+      }
+    } catch (err: any) {
+      console.error('loginWithGoogle error:', err);
+      throw err;
+    }
   }, []);
 
   // Save Product
@@ -393,26 +467,14 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
       return next;
     });
 
-    // Write to Firestore for instant real-time multi-device sync
-    setDoc(doc(db, 'products', prodId), sanitizeForFirestore(cleanProd), { merge: true }).catch((err) =>
-      console.warn('[Firestore] saveProduct setDoc warning:', err)
-    );
-
     try {
-      const endpoint = product.id ? `/api/products/${encodeURIComponent(product.id)}` : '/api/products';
-      const res = await fetchApi(endpoint, {
-        method: product.id ? 'PUT' : 'POST',
-        body: JSON.stringify(cleanProd)
-      });
-      if (res && res.success) {
-        return { success: true, product: res.product || cleanProd };
-      }
-      return { success: false, error: res?.error || 'Gagal menyimpan produk ke pangkalan data.' };
+      await setDoc(doc(db, 'products', prodId), sanitizeForFirestore(cleanProd), { merge: true });
+      return { success: true, product: cleanProd };
     } catch (err: any) {
-      console.error('saveProduct API error:', err);
+      console.error('saveProduct Firestore error:', err);
       return { success: false, error: err?.message || 'Ralat semasa menyimpan produk.' };
     }
-  }, [fetchApi]);
+  }, []);
 
   // Delete Product
   const deleteProduct = useCallback(async (productId: string) => {
@@ -422,16 +484,12 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
       return next;
     });
 
-    deleteDoc(doc(db, 'products', productId)).catch((err) =>
-      console.warn('[Firestore] deleteProduct deleteDoc warning:', err)
-    );
-
     try {
-      await fetchApi(`/api/products/${encodeURIComponent(productId)}`, { method: 'DELETE' });
+      await deleteDoc(doc(db, 'products', productId));
     } catch (err) {
-      console.error('deleteProduct API error:', err);
+      console.error('deleteProduct Firestore error:', err);
     }
-  }, [fetchApi]);
+  }, []);
 
   // Reorder Products
   const reorderProducts = useCallback(async (orderedProducts: Product[]) => {
@@ -439,14 +497,14 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
     LocalStorageFallback.saveProducts(orderedProducts);
 
     try {
-      await fetchApi('/api/products/reorder', {
-        method: 'POST',
-        body: JSON.stringify({ products: orderedProducts })
-      });
+      for (let i = 0; i < orderedProducts.length; i++) {
+        const item = { ...orderedProducts[i], sortOrder: i + 1 };
+        await setDoc(doc(db, 'products', item.id), sanitizeForFirestore(item), { merge: true });
+      }
     } catch (err) {
-      console.error('reorderProducts API error:', err);
+      console.error('reorderProducts error:', err);
     }
-  }, [fetchApi]);
+  }, []);
 
   // Save Category
   const saveCategory = useCallback(async (cat: Partial<Category> & { name: string }): Promise<{ success: boolean; error?: string; category?: Category }> => {
@@ -463,20 +521,13 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
       return next;
     });
 
-    setDoc(doc(db, 'categories', catId), sanitizeForFirestore(cleanCat), { merge: true }).catch((err) =>
-      console.warn('[Firestore] saveCategory setDoc warning:', err)
-    );
-
     try {
-      const res = await fetchApi(cat.id ? `/api/categories/${cat.id}` : '/api/categories', {
-        method: cat.id ? 'PUT' : 'POST',
-        body: JSON.stringify(cleanCat)
-      });
-      return { success: res.success, category: res.category || cleanCat };
+      await setDoc(doc(db, 'categories', catId), sanitizeForFirestore(cleanCat), { merge: true });
+      return { success: true, category: cleanCat };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
-  }, [fetchApi]);
+  }, []);
 
   // Edit Category
   const editCategory = useCallback(async (categoryId: string, newName: string): Promise<{ success: boolean; error?: string; affectedProductsCount?: number }> => {
@@ -506,18 +557,14 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
       return next;
     });
 
-    deleteDoc(doc(db, 'categories', categoryId)).catch((err) =>
-      console.warn('[Firestore] deleteCategory deleteDoc warning:', err)
-    );
-
     try {
-      await fetchApi(`/api/categories/${categoryId}`, { method: 'DELETE' });
+      await deleteDoc(doc(db, 'categories', categoryId));
     } catch {
       // Ignore
     }
 
     return { success: true };
-  }, [categories, products, fetchApi]);
+  }, [categories, products]);
 
   // Reorder Categories List
   const reorderCategoriesList = useCallback(async (orderedCategories: Category[]) => {
@@ -525,14 +572,14 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
     LocalStorageFallback.saveCategories(orderedCategories);
 
     try {
-      await fetchApi('/api/categories/reorder', {
-        method: 'POST',
-        body: JSON.stringify({ categories: orderedCategories })
-      });
+      for (let i = 0; i < orderedCategories.length; i++) {
+        const item = { ...orderedCategories[i], sortOrder: i + 1 };
+        await setDoc(doc(db, 'categories', item.id), sanitizeForFirestore(item), { merge: true });
+      }
     } catch (err) {
       console.error('reorderCategoriesList error:', err);
     }
-  }, [fetchApi]);
+  }, []);
 
   // Reorder Categories String Names
   const reorderCategories = useCallback(async (orderedNames: string[]) => {
@@ -565,19 +612,12 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
       return next;
     });
 
-    setDoc(doc(db, 'customers', custId), sanitizeForFirestore(cleanCust), { merge: true }).catch((err) =>
-      console.warn('[Firestore] saveCustomer setDoc warning:', err)
-    );
-
     try {
-      await fetchApi(cust.id ? `/api/customers/${cust.id}` : '/api/customers', {
-        method: cust.id ? 'PUT' : 'POST',
-        body: JSON.stringify(cleanCust)
-      });
+      await setDoc(doc(db, 'customers', custId), sanitizeForFirestore(cleanCust), { merge: true });
     } catch (err) {
       console.error('saveCustomer error:', err);
     }
-  }, [fetchApi]);
+  }, []);
 
   // Delete Customer
   const deleteCustomer = useCallback(async (customerId: string): Promise<{ success: boolean; error?: string }> => {
@@ -591,17 +631,13 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
       return next;
     });
 
-    deleteDoc(doc(db, 'customers', customerId)).catch((err) =>
-      console.warn('[Firestore] deleteCustomer deleteDoc warning:', err)
-    );
-
     try {
-      await fetchApi(`/api/customers/${customerId}`, { method: 'DELETE' });
+      await deleteDoc(doc(db, 'customers', customerId));
     } catch {
       // Ignore
     }
     return { success: true };
-  }, [fetchApi]);
+  }, []);
 
   // Save Transaction
   const saveTransaction = useCallback(async (tx: Transaction) => {
@@ -611,19 +647,12 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
       return next;
     });
 
-    setDoc(doc(db, 'transactions', tx.id), sanitizeForFirestore(tx), { merge: true }).catch((err) =>
-      console.warn('[Firestore] saveTransaction setDoc warning:', err)
-    );
-
     try {
-      await fetchApi('/api/transactions', {
-        method: 'POST',
-        body: JSON.stringify(tx)
-      });
+      await setDoc(doc(db, 'transactions', tx.id), sanitizeForFirestore(tx), { merge: true });
     } catch (err) {
-      console.error('saveTransaction API error:', err);
+      console.error('saveTransaction Firestore error:', err);
     }
-  }, [fetchApi]);
+  }, []);
 
   // Void Transaction
   const voidTransaction = useCallback(async (txId: string, reason: string) => {
@@ -647,20 +676,13 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
     });
 
     if (voidedTx) {
-      setDoc(doc(db, 'transactions', txId), sanitizeForFirestore(voidedTx), { merge: true }).catch((err) =>
-        console.warn('[Firestore] voidTransaction setDoc warning:', err)
-      );
+      try {
+        await setDoc(doc(db, 'transactions', txId), sanitizeForFirestore(voidedTx), { merge: true });
+      } catch (err) {
+        console.error('voidTransaction Firestore error:', err);
+      }
     }
-
-    try {
-      await fetchApi(`/api/transactions/${txId}/void`, {
-        method: 'POST',
-        body: JSON.stringify({ reason })
-      });
-    } catch (err) {
-      console.error('voidTransaction API error:', err);
-    }
-  }, [fetchApi]);
+  }, []);
 
   // Update Transaction WhatsApp Status
   const updateTransactionWhatsAppStatus = useCallback(async (
@@ -691,68 +713,40 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
     });
 
     if (updatedTx) {
-      setDoc(doc(db, 'transactions', txId), sanitizeForFirestore(updatedTx), { merge: true }).catch((err) =>
-        console.warn('[Firestore] updateTransactionWhatsAppStatus setDoc warning:', err)
-      );
+      try {
+        await setDoc(doc(db, 'transactions', txId), sanitizeForFirestore(updatedTx), { merge: true });
+      } catch (err) {
+        console.error('updateTransactionWhatsAppStatus Firestore error:', err);
+      }
     }
-
-    try {
-      await fetchApi(`/api/transactions/${txId}/whatsapp`, {
-        method: 'PUT',
-        body: JSON.stringify({ status, sent: status === 'sent', phone, error })
-      });
-    } catch (err) {
-      console.error('updateTransactionWhatsAppStatus API error:', err);
-    }
-  }, [fetchApi]);
+  }, []);
 
   // Save Held Tickets
   const saveHeldTickets = useCallback(async (tickets: HeldTicket[]) => {
     setHeldTickets(tickets);
     LocalStorageFallback.saveHeldTickets(tickets);
 
-    // Sync each held ticket to Firestore
-    tickets.forEach((t) => {
-      setDoc(doc(db, 'held_tickets', t.id), sanitizeForFirestore(t), { merge: true }).catch((err) =>
-        console.warn('[Firestore] saveHeldTickets setDoc warning:', err)
-      );
-    });
-
     try {
-      await fetchApi('/api/held-tickets', {
-        method: 'POST',
-        body: JSON.stringify({ tickets })
-      });
+      for (const t of tickets) {
+        await setDoc(doc(db, 'held_tickets', t.id), sanitizeForFirestore(t), { merge: true });
+      }
     } catch (err) {
-      console.error('saveHeldTickets API error:', err);
+      console.error('saveHeldTickets Firestore error:', err);
     }
-  }, [fetchApi]);
+  }, []);
 
   // Save Settings
   const saveSettings = useCallback(async (newSettings: AppSettings): Promise<{ success: boolean; error?: string }> => {
     setSettings(newSettings);
     LocalStorageFallback.saveSettings(newSettings);
 
-    setDoc(doc(db, 'settings', 'store_config'), sanitizeForFirestore(newSettings), { merge: true }).catch((err) =>
-      console.warn('[Firestore] saveSettings setDoc warning:', err)
-    );
-
     try {
-      const res = await fetchApi('/api/settings', {
-        method: 'PUT',
-        body: JSON.stringify(newSettings)
-      });
-      if (res && res.success) {
-        return { success: true };
-      }
-      return { 
-        success: false, 
-        error: res?.error || res?.message || 'Sila pastikan anda telah log masuk sebagai Admin untuk menyimpan tetapan.' 
-      };
+      await setDoc(doc(db, 'settings', 'store_config'), sanitizeForFirestore(newSettings), { merge: true });
+      return { success: true };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Ralat sambungan ke pangkalan data.' };
     }
-  }, [fetchApi]);
+  }, []);
 
   // Save Fonnte Token
   const saveFonnteToken = useCallback(async (token: string): Promise<{ success: boolean; error?: string }> => {
@@ -765,23 +759,12 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
     return LocalStorageFallback.getNextInvoiceNo();
   }, []);
 
-  // Seed Defaults
-  const seedDbDefaults = useCallback(async () => {
-    await refreshAllData();
-  }, [refreshAllData]);
-
   // Reset All Data
   const resetAllData = useCallback(async () => {
     LocalStorageFallback.resetAllData();
-    setProducts(DEFAULT_PRODUCTS);
-    setCategories(DEFAULT_CATEGORY_ITEMS);
-    setCustomers(DEFAULT_CUSTOMERS);
-    setSettings(DEFAULT_SETTINGS);
-    setTransactions([]);
-    setHeldTickets([]);
   }, []);
 
-  // Staff Management: Create Staff User
+  // Staff Management: Create Staff User using secondary Firebase Auth instance
   const createStaffUser = useCallback(async (userData: {
     name: string;
     phone: string;
@@ -791,19 +774,59 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
     status: 'active' | 'inactive';
   }): Promise<{ success: boolean; error?: string }> => {
     try {
-      const res = await fetchApi('/api/staff', {
-        method: 'POST',
-        body: JSON.stringify(userData)
-      });
-      if (res.success && res.staff) {
-        setStaffUsers((prev) => [...prev, res.staff]);
-        return { success: true };
+      const cleanLoginId = userData.loginId.trim().toLowerCase();
+      if (!userData.name || !cleanLoginId || !userData.password || !userData.role) {
+        return { success: false, error: 'Sila lengkapkan nama, login ID, kata laluan, dan peranan.' };
       }
-      return { success: false, error: res.error || 'Gagal mendaftar staf.' };
+      if (userData.password.length < 6) {
+        return { success: false, error: 'Kata laluan mestilah sekurang-kurangnya 6 aksara.' };
+      }
+
+      // Check existing in Firestore
+      const allUsersSnap = await getDocs(collection(db, 'users'));
+      const exists = allUsersSnap.docs.some((d) => (d.data().loginId || d.data().login_id)?.toLowerCase() === cleanLoginId);
+      if (exists) {
+        return { success: false, error: `Login ID "${userData.loginId}" telah wujud.` };
+      }
+
+      const email = getFirebaseEmailFromLoginId(cleanLoginId);
+
+      // Initialize secondary auth instance to create staff user without logging out active admin
+      const appName = 'StaffCreatorApp';
+      const secondaryApp = getApps().find((a) => a.name === appName) || initializeApp(firebaseConfig, appName);
+      const secondaryAuth = getAuth(secondaryApp);
+
+      let newUid = '';
+      try {
+        const userCred = await createUserWithEmailAndPassword(secondaryAuth, email, userData.password);
+        newUid = userCred.user.uid;
+        await signOut(secondaryAuth);
+      } catch (authErr: any) {
+        if (authErr?.code === 'auth/email-already-in-use') {
+          return { success: false, error: `Login ID "${cleanLoginId}" telah terdaftar dalam Firebase Auth.` };
+        }
+        return { success: false, error: `Ralat Firebase Auth: ${authErr?.message || authErr}` };
+      }
+
+      const newStaff: AppUser = {
+        id: newUid,
+        uid: newUid,
+        loginId: cleanLoginId,
+        name: userData.name.trim(),
+        phone: userData.phone?.trim() || '',
+        role: userData.role,
+        status: userData.status || 'active',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      await setDoc(doc(db, 'users', newUid), sanitizeForFirestore(newStaff));
+      return { success: true };
     } catch (err: any) {
-      return { success: false, error: err.message || 'Ralat pelayan.' };
+      console.error('createStaffUser error:', err);
+      return { success: false, error: err.message || 'Gagal mendaftar staf.' };
     }
-  }, [fetchApi]);
+  }, []);
 
   // Staff Management: Update Staff User
   const updateStaffUser = useCallback(async (
@@ -811,24 +834,27 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
     data: Partial<AppUser> & { newPassword?: string }
   ): Promise<{ success: boolean; error?: string }> => {
     try {
-      const payload = {
-        ...data,
-        password: data.newPassword,
+      const updates: any = {
+        updatedAt: new Date().toISOString(),
       };
-      const res = await fetchApi(`/api/staff/${userId}`, {
-        method: 'PUT',
-        body: JSON.stringify(payload)
-      });
+      if (data.name) updates.name = data.name.trim();
+      if (data.phone !== undefined) updates.phone = data.phone.trim();
+      if (data.loginId) updates.loginId = data.loginId.trim().toLowerCase();
+      if (data.role) updates.role = data.role;
+      if (data.status) updates.status = data.status;
 
-      if (res.success && res.staff) {
-        setStaffUsers((prev) => prev.map((u) => (u.uid === userId || u.id === userId ? res.staff : u)));
-        return { success: true };
+      await setDoc(doc(db, 'users', userId), sanitizeForFirestore(updates), { merge: true });
+
+      if (data.newPassword && data.newPassword.trim().length >= 6) {
+        console.warn('[Staff Management] Profile updated. Changing password requires staff login or Admin SDK reset.');
       }
-      return { success: false, error: res.error || 'Gagal mengemas kini staf.' };
+
+      return { success: true };
     } catch (err: any) {
-      return { success: false, error: err.message || 'Ralat pelayan.' };
+      console.error('updateStaffUser error:', err);
+      return { success: false, error: err.message || 'Gagal mengemas kini staf.' };
     }
-  }, [fetchApi]);
+  }, []);
 
   // Toggle Staff Status
   const toggleStaffStatus = useCallback(async (
@@ -842,16 +868,13 @@ export function ApiSyncProvider({ children }: { children: ReactNode }) {
   // Delete Staff User
   const deleteStaffUser = useCallback(async (userId: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      const res = await fetchApi(`/api/staff/${userId}`, { method: 'DELETE' });
-      if (res.success) {
-        setStaffUsers((prev) => prev.filter((u) => u.uid !== userId && u.id !== userId));
-        return { success: true };
-      }
-      return { success: false, error: res.error || 'Gagal memadam staf.' };
+      await deleteDoc(doc(db, 'users', userId));
+      return { success: true };
     } catch (err: any) {
-      return { success: false, error: err.message || 'Ralat pelayan.' };
+      console.error('deleteStaffUser error:', err);
+      return { success: false, error: err.message || 'Gagal memadam staf.' };
     }
-  }, [fetchApi]);
+  }, []);
 
   return (
     <ApiSyncContext.Provider

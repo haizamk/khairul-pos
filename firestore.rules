@@ -36,14 +36,31 @@ service cloud.firestore {
 
     // 1. USERS COLLECTION
     match /users/{userId} {
-      // Cashiers can only read their own user document; Admins can read all staff
+      // Cashiers can read their own user document; Admins can read all staff
       allow read: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
-      allow create: if isAdmin() && (
-        request.resource.data.role != "master_admin" || isMasterAdmin()
-      );
-      allow update: if isAdmin() && (
-        request.resource.data.role != "master_admin" || isMasterAdmin()
-      );
+
+      // On CREATE:
+      // - Master Admin can create any profile.
+      // - Admin can create staff profiles (cannot create master_admin).
+      // - Self-profile creation strictly enforces role == 'cashier' and status == 'active'.
+      allow create: if isMasterAdmin() ||
+        (isAdmin() && request.resource.data.role != "master_admin") ||
+        (isSignedIn() && request.auth.uid == userId && request.resource.data.role == "cashier" && request.resource.data.status == "active");
+
+      // On UPDATE:
+      // - Master Admin can update any profile.
+      // - Admin can update staff profiles (cannot promote to master_admin).
+      // - Self-profile update CANNOT modify role, status, uid, or loginId.
+      allow update: if isMasterAdmin() ||
+        (isAdmin() && request.resource.data.role != "master_admin") ||
+        (isSignedIn() && request.auth.uid == userId &&
+         request.resource.data.role == resource.data.role &&
+         request.resource.data.status == resource.data.status &&
+         request.resource.data.uid == resource.data.uid &&
+         request.resource.data.loginId == resource.data.loginId);
+
+      // On DELETE:
+      // Only Master Admin can delete user documents
       allow delete: if isMasterAdmin();
     }
 
@@ -78,9 +95,10 @@ service cloud.firestore {
       allow read, create, update, delete: if isSignedIn();
     }
 
-    // 7. SETTINGS COLLECTION (Contains adminPin - restricted to Admin & Master Admin)
+    // 7. SETTINGS COLLECTION (Store config & receipt settings for POS UI)
     match /settings/{settingId} {
-      allow read, create, update, delete: if isAdmin();
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
     }
   }
 }
